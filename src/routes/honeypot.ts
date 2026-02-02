@@ -16,44 +16,24 @@ function badRequest(res: Response, message: string) {
 }
 
 router.post("/honeypot", async (req: Request, res: Response) => {
-  const body = (req.body || {}) as {
+  const body = req.body as {
     sessionId?: string;
-    message?: { sender?: "scammer" | "user"; text?: string; timestamp?: string } | string;
-    text?: string;
+    message?: { sender?: "scammer" | "user"; text?: string; timestamp?: string };
     conversationHistory?: { sender: string; text: string; timestamp: string }[];
     metadata?: { channel?: string; language?: string; locale?: string };
   };
 
-  const nowIso = new Date().toISOString();
-  const sessionId = body.sessionId || `tester-${Date.now()}`;
-
-  let messageText = "";
-  let messageSender: "scammer" | "user" = "scammer";
-  let messageTimestamp = nowIso;
-
-  if (typeof body.message === "string") {
-    messageText = body.message;
-  } else if (body.message) {
-    messageText = body.message.text || "";
-    messageSender = body.message.sender || "scammer";
-    messageTimestamp = body.message.timestamp || nowIso;
-  } else if (body.text) {
-    messageText = body.text;
+  if (!body.sessionId) return badRequest(res, "Missing sessionId");
+  if (!body.message?.text || !body.message?.sender || !body.message?.timestamp) {
+    return badRequest(res, "Missing message fields");
   }
 
-  if (!messageText) {
-    return badRequest(res, "Missing message text");
-  }
+  const session = store.getOrCreate(body.sessionId, body.message.timestamp);
 
-  const conversationHistory = body.conversationHistory || [];
-  const metadata = body.metadata || { channel: "SMS", language: "English", locale: "IN" };
+  const historyTexts = (body.conversationHistory || []).map((m) => m.text);
+  const texts = [body.message.text, ...historyTexts];
 
-  const session = store.getOrCreate(sessionId, messageTimestamp);
-
-  const historyTexts = conversationHistory.map((m) => m.text);
-  const texts = [messageText, ...historyTexts];
-
-  const normalized = normalizeText(messageText);
+  const normalized = normalizeText(body.message.text);
   const extracted = extractIntelligence(texts);
   const merged = mergeIntelligence(session.extractedIntelligence, extracted);
 
@@ -93,13 +73,13 @@ router.post("/honeypot", async (req: Request, res: Response) => {
     lastIntents: session.lastIntents
   });
 
-  const summary = summarize(conversationHistory, merged, session.story, session.persona);
+  const summary = summarize(body.conversationHistory || [], merged, session.story, session.persona);
   const reply = await writeReplySmart(
     {
       nextIntent: planner.nextIntent,
       state: planner.updatedState,
       stressScore: scores.stressScore,
-      lastScammerMessage: messageText,
+      lastScammerMessage: body.message.text,
       story: session.story,
       lastReplies: session.lastReplies,
       turnNumber: projectedTotal
@@ -113,8 +93,8 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   session.state = planner.updatedState;
   session.extractedIntelligence = merged;
   session.engagement.totalMessagesExchanged = projectedTotal;
-  if (messageSender === "scammer") session.engagement.scammerMessagesReceived += 1;
-  if (messageSender === "scammer") session.engagement.agentMessagesSent += 1;
+  if (body.message.sender === "scammer") session.engagement.scammerMessagesReceived += 1;
+  if (body.message.sender === "scammer") session.engagement.agentMessagesSent += 1;
   session.engagement.mode = planner.mode;
   session.engagement.lastMessageAt = now;
   session.agentNotes = planner.agentNotes;
