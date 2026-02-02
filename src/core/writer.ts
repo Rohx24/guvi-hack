@@ -9,12 +9,14 @@ export type WriterInput = {
     | "pretend_technical_issue"
     | "partial_comply_fake_info"
     | "request_link_or_upi"
-    | "ask_for_official_id_softly";
+    | "ask_for_official_id_softly"
+    | "confused_resistance";
   state: SessionState;
   stressScore: number;
   lastScammerMessage: string;
   story: StorySummary;
   lastReplies: string[];
+  turnNumber: number;
 };
 
 const templates: Record<WriterInput["nextIntent"], string[]> = {
@@ -101,6 +103,18 @@ const templates: Record<WriterInput["nextIntent"], string[]> = {
     "Please provide an official ID, just for record.",
     "Can you give me a ticket or reference number?",
     "Please share official details, I will note."
+  ],
+  confused_resistance: [
+    "Wait… why PIN on chat? App usually asks that.",
+    "Earlier OTP, now PIN? I'm getting confused.",
+    "Bank already has my details no? Why again?",
+    "This doesn't feel normal… are you sure?",
+    "Why link again? I already opened it.",
+    "I'm not sure about this step, it's different.",
+    "Hmm, you said verify first, now pay? Why?",
+    "Why you need OTP here? I don't understand.",
+    "This is new to me… I feel uneasy.",
+    "I'm scared, this is not how bank does."
   ]
 };
 
@@ -135,17 +149,34 @@ export type OpenAIWriter = (
   conversationSummary: string
 ) => Promise<string>;
 
+function emotionalStage(turnNumber: number): "early" | "middle" | "late" {
+  if (turnNumber <= 2) return "early";
+  if (turnNumber <= 6) return "middle";
+  return "late";
+}
+
+function shouldUseConfusedResistance(input: WriterInput): boolean {
+  const stressy = input.stressScore > 0.6;
+  const otpAsk = /otp|pin|password|cvv|account|upi/i.test(input.lastScammerMessage);
+  if (!stressy || !otpAsk) return false;
+  const chance = 0.25;
+  return Math.random() < chance;
+}
+
 export async function writeReplySmart(
   input: WriterInput,
   persona: Persona,
   summary: string,
   openaiWriter: OpenAIWriter
 ): Promise<string> {
+  const stage = emotionalStage(input.turnNumber);
+  const canResist = stage !== "early" && shouldUseConfusedResistance(input);
+  const selectedInput: WriterInput = canResist ? { ...input, nextIntent: "confused_resistance" } : input;
   try {
-    const reply = await openaiWriter(input, persona, summary);
+    const reply = await openaiWriter(selectedInput, persona, summary);
     if (isValidReply(reply, input.lastReplies)) return reply;
   } catch (err) {
     // fallback below
   }
-  return writeReply(input);
+  return writeReply(selectedInput);
 }

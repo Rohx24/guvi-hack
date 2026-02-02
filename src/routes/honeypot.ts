@@ -81,7 +81,8 @@ router.post("/honeypot", async (req: Request, res: Response) => {
       stressScore: scores.stressScore,
       lastScammerMessage: body.message.text,
       story: session.story,
-      lastReplies: session.lastReplies
+      lastReplies: session.lastReplies,
+      turnNumber: projectedTotal
     },
     session.persona,
     summary,
