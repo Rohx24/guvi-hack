@@ -17,6 +17,8 @@ export type WriterInput = {
   story: StorySummary;
   lastReplies: string[];
   turnNumber: number;
+  phase: "SHOCK" | "PUSHBACK" | "OVERWHELM" | "NEAR_COMPLY" | "EXIT";
+  lastFriction: string;
 };
 
 const templates: Record<WriterInput["nextIntent"], string[]> = {
@@ -60,25 +62,25 @@ const templates: Record<WriterInput["nextIntent"], string[]> = {
     "App not opening… error.",
     "Link not loading, net slow.",
     "Page stuck, just spinning.",
-    "It’s asking PIN, not OTP.",
     "UPI name showing different.",
     "Paste not working, phone hang.",
     "It says invalid beneficiary.",
     "Payment failed, what now?",
     "Timeout again…",
-    "App stuck, I’ll retry."
+    "App stuck, I’ll retry.",
+    "Something is off, app freezing."
   ],
   partial_comply_fake_info: [
     "OTP not received. Resend?",
     "I entered, it says invalid.",
     "OTP not coming…",
     "Typed and it failed.",
-    "It’s asking PIN, I can’t.",
     "Error after submit.",
     "Tried once, nothing.",
     "It says try later.",
-    "Last digits failed.",
-    "Can’t proceed, OTP gone."
+    "OTP came and disappeared.",
+    "Transaction failed.",
+    "UPI asking PIN, I don’t remember."
   ],
   request_link_or_upi: [
     "Okay, please send the link or UPI ID again. I will check now.",
@@ -114,12 +116,37 @@ const templates: Record<WriterInput["nextIntent"], string[]> = {
     "Why you need OTP here?",
     "This is new to me…",
     "It’s not how SBI works?",
-    "Hmm… I don’t get this."
+    "Hmm… I don’t get this.",
+    "Why so urgent? It’s making me nervous.",
+    "You said call, now only chat?",
+    "This is not matching what you said."
   ]
 };
 
+const frictionTemplates: Record<string, string[]> = {
+  otp_not_received: ["OTP not received.", "OTP not coming.", "OTP came and disappeared."],
+  name_mismatch: ["UPI name showing different.", "Beneficiary name not matching.", "Name mismatch on UPI."],
+  pin_forgot: ["UPI asking PIN, I don’t remember.", "It asks PIN, I can’t.", "PIN is not coming to mind."],
+  app_crash: ["App crashed again.", "App stuck, it closed.", "Phone is hanging now."],
+  server_down: ["Server error showing.", "It says try later.", "Timeout again."]
+};
+
+function applyPhaseFilter(options: string[], phase: WriterInput["phase"]): string[] {
+  if (phase === "OVERWHELM" || phase === "NEAR_COMPLY" || phase === "EXIT") {
+    return options.filter((text) => !/sir|ma'am/i.test(text));
+  }
+  return options;
+}
+
 export function writeReply(input: WriterInput): string {
-  const options = templates[input.nextIntent] || templates.clarify_procedure;
+  let options = templates[input.nextIntent] || templates.clarify_procedure;
+  if (input.nextIntent === "pretend_technical_issue" || input.nextIntent === "partial_comply_fake_info") {
+    const friction = frictionTemplates[input.lastFriction];
+    if (friction && friction.length > 0) {
+      options = [...friction, ...options];
+    }
+  }
+  options = applyPhaseFilter(options, input.phase);
   const available = options.filter((text) => !input.lastReplies.includes(text));
   const pool = available.length > 0 ? available : options;
   const index = Math.floor(Math.random() * pool.length);
@@ -132,11 +159,24 @@ export function writeReply(input: WriterInput): string {
   return selected;
 }
 
-const forbidden = ["scam", "fraud", "honeypot", "ai", "bot", "police complaint", "report"];
+const forbidden = [
+  "scam",
+  "fraud",
+  "honeypot",
+  "ai",
+  "bot",
+  "phishing",
+  "police",
+  "complaint",
+  "cybercrime",
+  "rbi",
+  "report"
+];
 
 function isValidReply(reply: string, lastReplies: string[]): boolean {
   if (!reply) return false;
   if (reply.length > 240) return false;
+  if (reply.split(/\n/).length > 2) return false;
   const lower = reply.toLowerCase();
   if (forbidden.some((word) => lower.includes(word))) return false;
   if (lastReplies.includes(reply)) return false;
@@ -149,35 +189,17 @@ export type OpenAIWriter = (
   conversationSummary: string
 ) => Promise<string>;
 
-function emotionalStage(turnNumber: number): "early" | "middle" | "late" {
-  if (turnNumber <= 2) return "early";
-  if (turnNumber <= 6) return "middle";
-  return "late";
-}
-
-function shouldUseConfusedResistance(input: WriterInput): boolean {
-  const stressy = input.stressScore > 0.6;
-  const otpAsk = /otp|pin|password|cvv|account|upi/i.test(input.lastScammerMessage);
-  if (!stressy || !otpAsk) return false;
-  const stage = emotionalStage(input.turnNumber);
-  const chance = stage === "late" ? 0.35 : 0.25;
-  return Math.random() < chance;
-}
-
 export async function writeReplySmart(
   input: WriterInput,
   persona: Persona,
   summary: string,
   openaiWriter: OpenAIWriter
 ): Promise<string> {
-  const stage = emotionalStage(input.turnNumber);
-  const canResist = stage !== "early" && shouldUseConfusedResistance(input);
-  const selectedInput: WriterInput = canResist ? { ...input, nextIntent: "confused_resistance" } : input;
   try {
-    const reply = await openaiWriter(selectedInput, persona, summary);
+    const reply = await openaiWriter(input, persona, summary);
     if (isValidReply(reply, input.lastReplies)) return reply;
   } catch (err) {
     // fallback below
   }
-  return writeReply(selectedInput);
+  return writeReply(input);
 }

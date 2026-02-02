@@ -24,7 +24,8 @@ export type Intent =
   | "pretend_technical_issue"
   | "partial_comply_fake_info"
   | "request_link_or_upi"
-  | "ask_for_official_id_softly";
+  | "ask_for_official_id_softly"
+  | "confused_resistance";
 
 export type GoalFlags = {
   gotUpiId: boolean;
@@ -38,6 +39,13 @@ export type GoalFlags = {
 export type PlannerInput = {
   scamScore: number;
   stressScore: number;
+  signals: {
+    urgency: number;
+    authority: number;
+    threat: number;
+    credential: number;
+    payment: number;
+  };
   state: SessionState;
   engagement: {
     totalMessagesExchanged: number;
@@ -47,6 +55,11 @@ export type PlannerInput = {
   maxTurns: number;
   goalFlags: GoalFlags;
   lastIntents: Intent[];
+  phase: "SHOCK" | "PUSHBACK" | "OVERWHELM" | "NEAR_COMPLY" | "EXIT";
+  convictionToComply: number;
+  askedVerification: boolean;
+  lastFriction: string;
+  normalizedText: string;
 };
 
 export type PlannerOutput = {
@@ -55,6 +68,10 @@ export type PlannerOutput = {
   updatedState: SessionState;
   scamDetected: boolean;
   agentNotes: string;
+  nextPhase: "SHOCK" | "PUSHBACK" | "OVERWHELM" | "NEAR_COMPLY" | "EXIT";
+  nextConvictionToComply: number;
+  nextAskedVerification: boolean;
+  nextFriction: string;
 };
 
 function intentRepeated(intent: Intent, lastIntents: Intent[]): boolean {
@@ -82,7 +99,23 @@ function pickAlternateIntent(
 }
 
 export function planNext(input: PlannerInput): PlannerOutput {
-  const { scamScore, stressScore, state, engagement, extracted, story, maxTurns, goalFlags, lastIntents } = input;
+  const {
+    scamScore,
+    stressScore,
+    signals,
+    state,
+    engagement,
+    extracted,
+    story,
+    maxTurns,
+    goalFlags,
+    lastIntents,
+    phase,
+    convictionToComply,
+    askedVerification,
+    lastFriction,
+    normalizedText
+  } = input;
   let mode: SessionMode = "SAFE";
   if (scamScore >= 0.75) mode = "SCAM_CONFIRMED";
   else if (scamScore >= 0.45) mode = "SUSPECT";
@@ -98,21 +131,40 @@ export function planNext(input: PlannerInput): PlannerOutput {
   };
 
   let nextIntent: Intent = "clarify_procedure";
+  let nextPhase = phase;
+  let nextConviction = convictionToComply;
+  let nextAskedVerification = askedVerification;
+  let nextFriction = lastFriction || "otp_not_received";
 
   const needsUPI = !goalFlags.gotUpiId;
   const needsLink = !goalFlags.gotPaymentLink;
   const needsPhoneOrEmail = !goalFlags.gotPhoneOrEmail;
   const disallow = new Set<Intent>();
 
-  if (goalFlags.gotUpiId || goalFlags.gotPaymentLink || goalFlags.gotBankAccountLikeDigits) {
+  if (goalFlags.gotUpiId || goalFlags.gotPaymentLink || goalFlags.gotBankAccountLikeDigits || goalFlags.gotPhoneOrEmail) {
     disallow.add("request_link_or_upi");
   }
 
   const earlyTurns = engagement.totalMessagesExchanged <= 2;
   const scammerAlreadySharedLinkOrUpi = goalFlags.gotUpiId || goalFlags.gotPaymentLink;
 
+  const otpOrPinAsk = /otp|pin|password|cvv|account/i.test(normalizedText);
+  const urgencyHit = signals.urgency + signals.threat > 0 ? 0.08 : 0;
+  const authorityHit = signals.authority > 0 ? 0.05 : 0;
+  const repeatedPressure = signals.credential > 0 ? 0.06 : 0;
+  const inconsistencyHit = /otp.*pin|pin.*otp/i.test(normalizedText) ? 0.08 : 0;
+  const directAccountAsk = /account number|bank account|card number/i.test(normalizedText) ? 0.08 : 0;
+  const refusesCall = /no call|don't call|dont call|only chat|no call back/i.test(normalizedText) ? 0.06 : 0;
+  const decreases = (otpOrPinAsk ? 0.08 : 0) + inconsistencyHit + directAccountAsk + refusesCall;
+
+  nextConviction = clamp01(nextConviction + urgencyHit + authorityHit + repeatedPressure - decreases);
+
   if (earlyTurns) {
-    nextIntent = stressScore > 0.6 ? "seek_reassurance" : "clarify_procedure";
+    if (!askedVerification) {
+      nextIntent = "confused_resistance";
+    } else {
+      nextIntent = stressScore > 0.6 ? "seek_reassurance" : "clarify_procedure";
+    }
   } else if (
     (needsUPI || needsLink || needsPhoneOrEmail) &&
     !disallow.has("request_link_or_upi") &&
@@ -143,19 +195,47 @@ export function planNext(input: PlannerInput): PlannerOutput {
     nextIntent = "ask_for_official_id_softly";
   }
 
+  if (!askedVerification && engagement.totalMessagesExchanged <= 4) {
+    nextIntent = "confused_resistance";
+  }
+
+  const nearComplyAllowed =
+    engagement.totalMessagesExchanged >= 4 &&
+    stressScore > 0.6 &&
+    nextConviction > 0.55 &&
+    nextAskedVerification;
+
+  if (nearComplyAllowed) {
+    nextIntent = "partial_comply_fake_info";
+  }
+
+  if (phase === "PUSHBACK" && !nearComplyAllowed && !earlyTurns) {
+    nextIntent = "confused_resistance";
+  }
+
+  if (phase === "OVERWHELM" && !nearComplyAllowed) {
+    nextIntent = stressScore > 0.7 ? "seek_reassurance" : "pretend_technical_issue";
+  }
+
   if (
-    scamDetected &&
-    (goalFlags.gotUpiId || goalFlags.gotPaymentLink) &&
-    goalFlags.gotExplicitOtpAsk &&
-    engagement.totalMessagesExchanged >= 8
+    engagement.totalMessagesExchanged >= maxTurns ||
+    ((goalFlags.gotUpiId ||
+      goalFlags.gotPaymentLink ||
+      goalFlags.gotBankAccountLikeDigits ||
+      goalFlags.gotPhoneOrEmail) &&
+      engagement.totalMessagesExchanged >= 8)
   ) {
     mode = "COMPLETE";
-  } else if (engagement.totalMessagesExchanged >= maxTurns) {
-    mode = "COMPLETE";
+    nextPhase = "EXIT";
+  }
+
+  if (earlyTurns && (nextIntent === "request_link_or_upi" || nextIntent === "partial_comply_fake_info")) {
+    nextIntent = "clarify_procedure";
   }
 
   if (intentRepeated(nextIntent, lastIntents)) {
     const preferredFallbacks: Intent[] = [
+      "confused_resistance",
       "pretend_technical_issue",
       "seek_reassurance",
       "delay_busy",
@@ -169,6 +249,7 @@ export function planNext(input: PlannerInput): PlannerOutput {
 
   if (disallow.has(nextIntent)) {
     const preferredFallbacks: Intent[] = [
+      "confused_resistance",
       "pretend_technical_issue",
       "seek_reassurance",
       "delay_busy",
@@ -179,7 +260,43 @@ export function planNext(input: PlannerInput): PlannerOutput {
     nextIntent = pickAlternateIntent(preferredFallbacks, lastIntents, disallow);
   }
 
-  const agentNotes = `mode=${mode}, scamScore=${scamScore.toFixed(2)}, stressScore=${stressScore.toFixed(2)}, intent=${nextIntent}`;
+  if (nextIntent === "confused_resistance" || nextIntent === "ask_for_official_id_softly") {
+    nextAskedVerification = true;
+  }
 
-  return { nextIntent, mode, updatedState, scamDetected, agentNotes };
+  if (nextPhase === "EXIT") {
+    nextIntent = "delay_busy";
+  } else if (engagement.totalMessagesExchanged <= 1) {
+    nextPhase = "SHOCK";
+  } else if (nearComplyAllowed) {
+    nextPhase = "NEAR_COMPLY";
+  } else if (stressScore > 0.7 || updatedState.overwhelm > 0.6) {
+    nextPhase = "OVERWHELM";
+  } else if (!nextAskedVerification) {
+    nextPhase = "PUSHBACK";
+  } else {
+    nextPhase = "OVERWHELM";
+  }
+
+  if (nextPhase === "OVERWHELM") {
+    const frictionOrder = ["otp_not_received", "name_mismatch", "pin_forgot", "app_crash", "server_down"];
+    const idx = Math.max(0, frictionOrder.indexOf(nextFriction));
+    nextFriction = frictionOrder[(idx + 1) % frictionOrder.length];
+  }
+
+  const agentNotes = `mode=${mode}, phase=${nextPhase}, conviction=${nextConviction.toFixed(
+    2
+  )}, scamScore=${scamScore.toFixed(2)}, stressScore=${stressScore.toFixed(2)}, intent=${nextIntent}`;
+
+  return {
+    nextIntent,
+    mode,
+    updatedState,
+    scamDetected,
+    agentNotes,
+    nextPhase,
+    nextConvictionToComply: nextConviction,
+    nextAskedVerification,
+    nextFriction
+  };
 }
