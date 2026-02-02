@@ -104,26 +104,26 @@ export function planNext(input: PlannerInput): PlannerOutput {
   const needsPhoneOrEmail = !goalFlags.gotPhoneOrEmail;
   const disallow = new Set<Intent>();
 
-  if (goalFlags.gotUpiId || goalFlags.gotPaymentLink) {
+  if (goalFlags.gotUpiId || goalFlags.gotPaymentLink || goalFlags.gotBankAccountLikeDigits) {
     disallow.add("request_link_or_upi");
   }
 
   const earlyTurns = engagement.totalMessagesExchanged <= 2;
   const scammerAlreadySharedLinkOrUpi = goalFlags.gotUpiId || goalFlags.gotPaymentLink;
 
-  if (
+  if (earlyTurns) {
+    nextIntent = stressScore > 0.6 ? "seek_reassurance" : "clarify_procedure";
+  } else if (
     (needsUPI || needsLink || needsPhoneOrEmail) &&
     !disallow.has("request_link_or_upi") &&
-    (!earlyTurns || scammerAlreadySharedLinkOrUpi)
+    scammerAlreadySharedLinkOrUpi
   ) {
     nextIntent = "request_link_or_upi";
   }
 
-  if (goalFlags.gotUpiId || goalFlags.gotPaymentLink) {
+  if (goalFlags.gotUpiId || goalFlags.gotPaymentLink || goalFlags.gotBankAccountLikeDigits) {
     if (stressScore > 0.7) {
       nextIntent = "seek_reassurance";
-    } else if (updatedState.anxiety > 0.7) {
-      nextIntent = "delay_busy";
     } else if (updatedState.confusion > 0.6) {
       nextIntent = "clarify_procedure";
     } else {
