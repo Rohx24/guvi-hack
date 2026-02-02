@@ -68,6 +68,45 @@ async function run() {
   const json2 = await response2.json();
   console.log("Turn 2 status:", response2.status);
   console.log(JSON.stringify(json2, null, 2));
+
+  const reply2 = String(json2.reply || "");
+  if (/(upi|link|payment link)/i.test(reply2)) {
+    console.error("Test failed: reply after UPI/link still requests link or UPI.");
+    process.exit(1);
+  }
+
+  history.push(turn2);
+
+  const turn3 = {
+    sender: "scammer",
+    text: "Did you do it now? Please confirm quickly.",
+    timestamp: new Date().toISOString()
+  };
+
+  const response3 = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": API_KEY
+    },
+    body: JSON.stringify({
+      sessionId,
+      message: turn3,
+      conversationHistory: history,
+      metadata: { channel: "SMS", language: "English", locale: "IN" }
+    })
+  });
+
+  const json3 = await response3.json();
+  console.log("Turn 3 status:", response3.status);
+  console.log(JSON.stringify(json3, null, 2));
+
+  const reply1 = String(json1.reply || "");
+  const reply3 = String(json3.reply || "");
+  if (reply1 === reply2 || reply2 === reply3 || reply1 === reply3) {
+    console.error("Test failed: replies are repeating across turns.");
+    process.exit(1);
+  }
 }
 
 run().catch((err) => {

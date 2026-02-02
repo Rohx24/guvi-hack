@@ -37,6 +37,26 @@ router.post("/honeypot", async (req: Request, res: Response) => {
 
   const scores = computeScores(normalized, session.state);
 
+  const gotUpiId = merged.upiIds.length > 0;
+  const gotPaymentLink = merged.phishingLinks.length > 0;
+  const gotPhoneOrEmail = merged.phoneNumbers.length > 0 || merged.emails.length > 0;
+  const gotBankAccountLikeDigits = merged.bankAccounts.length > 0;
+  const gotPhishingUrl = merged.phishingLinks.length > 0;
+  const gotExplicitOtpAsk =
+    session.goalFlags.gotExplicitOtpAsk ||
+    normalized.includes("otp") ||
+    normalized.includes("one time password") ||
+    merged.suspiciousKeywords.includes("otp");
+
+  session.goalFlags = {
+    gotUpiId: session.goalFlags.gotUpiId || gotUpiId,
+    gotPaymentLink: session.goalFlags.gotPaymentLink || gotPaymentLink,
+    gotPhoneOrEmail: session.goalFlags.gotPhoneOrEmail || gotPhoneOrEmail,
+    gotBankAccountLikeDigits: session.goalFlags.gotBankAccountLikeDigits || gotBankAccountLikeDigits,
+    gotPhishingUrl: session.goalFlags.gotPhishingUrl || gotPhishingUrl,
+    gotExplicitOtpAsk
+  };
+
   const maxTurns = Number(process.env.MAX_TURNS || 14);
   const projectedTotal = session.engagement.totalMessagesExchanged + 1;
   const planner = planNext({
@@ -46,7 +66,9 @@ router.post("/honeypot", async (req: Request, res: Response) => {
     engagement: { totalMessagesExchanged: projectedTotal },
     extracted: merged,
     story: session.story,
-    maxTurns
+    maxTurns,
+    goalFlags: session.goalFlags,
+    lastIntents: session.lastIntents
   });
 
   const reply = writeReply({
@@ -54,7 +76,8 @@ router.post("/honeypot", async (req: Request, res: Response) => {
     state: planner.updatedState,
     stressScore: scores.stressScore,
     lastScammerMessage: body.message.text,
-    story: session.story
+    story: session.story,
+    lastReplies: session.lastReplies
   });
 
   const now = new Date().toISOString();
@@ -66,6 +89,8 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   session.engagement.mode = planner.mode;
   session.engagement.lastMessageAt = now;
   session.agentNotes = planner.agentNotes;
+  session.lastIntents = [...session.lastIntents, planner.nextIntent].slice(-6);
+  session.lastReplies = [...session.lastReplies, reply].slice(-3);
 
   if (!session.story.scammerClaim && scores.signals.authority > 0) {
     session.story.scammerClaim = "authority claim";

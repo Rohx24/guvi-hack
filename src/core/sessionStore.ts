@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { ExtractedIntelligence } from "./extractor";
-import { SessionMode, SessionState, StorySummary } from "./planner";
+import { GoalFlags, Intent, SessionMode, SessionState, StorySummary } from "./planner";
 
 export type EngagementMetrics = {
   mode: SessionMode;
@@ -18,6 +18,9 @@ export type SessionMemory = {
   engagement: EngagementMetrics;
   story: StorySummary;
   extractedIntelligence: ExtractedIntelligence;
+  goalFlags: GoalFlags;
+  lastIntents: Intent[];
+  lastReplies: string[];
   agentNotes: string;
 };
 
@@ -42,6 +45,15 @@ const DEFAULT_EXTRACTED: ExtractedIntelligence = {
   phoneNumbers: [],
   emails: [],
   suspiciousKeywords: []
+};
+
+const DEFAULT_GOALS: GoalFlags = {
+  gotUpiId: false,
+  gotPaymentLink: false,
+  gotPhoneOrEmail: false,
+  gotBankAccountLikeDigits: false,
+  gotPhishingUrl: false,
+  gotExplicitOtpAsk: false
 };
 
 export class SessionStore {
@@ -90,6 +102,9 @@ export class SessionStore {
       },
       story: { ...DEFAULT_STORY },
       extractedIntelligence: { ...DEFAULT_EXTRACTED },
+      goalFlags: { ...DEFAULT_GOALS },
+      lastIntents: [],
+      lastReplies: [],
       agentNotes: ""
     };
 
