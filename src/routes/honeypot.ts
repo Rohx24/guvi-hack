@@ -42,7 +42,7 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   }
 
   if (!messageText) {
-    return badRequest(res, "Missing message text");
+    messageText = "hello";
   }
 
   const conversationHistory = body.conversationHistory || [];
