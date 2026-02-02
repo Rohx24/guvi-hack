@@ -21,28 +21,28 @@ export type WriterInput = {
 
 const templates: Record<WriterInput["nextIntent"], string[]> = {
   clarify_procedure: [
-    "Wait… tell step by step, I’m lost.",
-    "I didn’t get it. What first?",
-    "Slowly please. One by one.",
-    "Explain again? I’m not getting.",
-    "I missed it… can you repeat?",
-    "What do I do first?",
-    "Just say the steps, simple.",
-    "I’m stuck, what now?",
-    "Tell me again, short.",
-    "I’m not clear, then?"
+    "Sir, I'm a bit confused. Please tell step by step what to do.",
+    "I'm not understanding properly, can you explain the process again?",
+    "Please guide me slowly, I'm getting mixed up.",
+    "Sorry, I didn't get it. What should I do first?",
+    "I'm worried and confused. Can you explain once more?",
+    "Please repeat the steps, I'm not clear.",
+    "I'm not very technical, tell me in simple way.",
+    "One by one steps please, I am little nervous.",
+    "Can you explain again, I don't want to do wrong?",
+    "I got confused, please guide me properly."
   ],
   seek_reassurance: [
-    "Is my account safe right now?",
-    "Please don’t block it, okay?",
-    "Tell me it will be fine.",
-    "Are you sure this fixes it?",
-    "It’s already blocked or not?",
-    "Please stay on line.",
-    "I can’t lose money…",
-    "Just confirm once, please.",
-    "I’m scared, say it’s okay.",
-    "Don’t close it, I’m trying."
+    "I'm getting worried, is my account safe? Please confirm once.",
+    "Please don't block anything, I will do it. Just guide me calmly.",
+    "I'm scared a bit, will this fix the issue?",
+    "Please assure me, I don't want any problem.",
+    "Is my account already blocked? Please say.",
+    "I'm tense, just tell me I'm safe.",
+    "Please confirm nothing bad will happen.",
+    "I'm worried about money, please guide me.",
+    "I'm not sure, please confirm once.",
+    "Please stay on line, I'm nervous."
   ],
   delay_busy: [
     "I'm outside right now, give me 10 minutes. Don't close the case please.",
@@ -57,28 +57,28 @@ const templates: Record<WriterInput["nextIntent"], string[]> = {
     "I'm with family, can we do later?"
   ],
   pretend_technical_issue: [
-    "App not opening… error.",
-    "Link not loading, net slow.",
-    "Page stuck, just spinning.",
-    "It’s asking PIN, not OTP.",
-    "UPI name showing different.",
-    "Paste not working, phone hang.",
-    "It says invalid beneficiary.",
-    "Payment failed, what now?",
-    "Timeout again…",
-    "App stuck, I’ll retry."
+    "The app is not opening, it shows error. What should I do now?",
+    "Network is weak here, I can't see the page. Please wait.",
+    "Page is stuck on loading, nothing happens.",
+    "My UPI app is asking for PIN, I'm not sure.",
+    "It says invalid UPI or beneficiary, what now?",
+    "I can't paste properly, phone is hanging.",
+    "Link not opening, maybe slow net.",
+    "It shows server error, please wait.",
+    "I'm getting timeout, can you hold?",
+    "App is stuck, I will try again."
   ],
   partial_comply_fake_info: [
-    "OTP not received. Resend?",
-    "I entered, it says invalid.",
-    "OTP not coming…",
-    "Typed and it failed.",
-    "It’s asking PIN, I can’t.",
-    "Error after submit.",
-    "Tried once, nothing.",
-    "It says try later.",
-    "Last digits failed.",
-    "Can’t proceed, OTP gone."
+    "I tried but OTP not received. Should I resend?",
+    "I entered the details but it's saying invalid. What next?",
+    "OTP not coming, maybe network issue.",
+    "I typed but it says wrong, can you resend?",
+    "It's asking for PIN, I don't remember now.",
+    "I'm getting error after submit, please guide.",
+    "I tried once, nothing happened. What now?",
+    "It says 'try later', should I wait?",
+    "I entered last digits but still failed.",
+    "I can't proceed, OTP not received."
   ],
   request_link_or_upi: [
     "Okay, please send the link or UPI ID again. I will check now.",
@@ -105,16 +105,16 @@ const templates: Record<WriterInput["nextIntent"], string[]> = {
     "Please share official details, I will note."
   ],
   confused_resistance: [
-    "Wait… why PIN on chat?",
-    "Earlier OTP, now PIN?",
-    "You already have my details no?",
-    "This step feels different…",
-    "Why link again? I opened it.",
-    "You said verify first, now pay?",
-    "Why you need OTP here?",
-    "This is new to me…",
-    "It’s not how SBI works?",
-    "Hmm… I don’t get this."
+    "Wait… why PIN on chat? App usually asks that.",
+    "Earlier OTP, now PIN? I'm getting confused.",
+    "Bank already has my details no? Why again?",
+    "This doesn't feel normal… are you sure?",
+    "Why link again? I already opened it.",
+    "I'm not sure about this step, it's different.",
+    "Hmm, you said verify first, now pay? Why?",
+    "Why you need OTP here? I don't understand.",
+    "This is new to me… I feel uneasy.",
+    "I'm scared, this is not how bank does."
   ]
 };
 
@@ -159,8 +159,7 @@ function shouldUseConfusedResistance(input: WriterInput): boolean {
   const stressy = input.stressScore > 0.6;
   const otpAsk = /otp|pin|password|cvv|account|upi/i.test(input.lastScammerMessage);
   if (!stressy || !otpAsk) return false;
-  const stage = emotionalStage(input.turnNumber);
-  const chance = stage === "late" ? 0.35 : 0.25;
+  const chance = 0.25;
   return Math.random() < chance;
 }
 
