@@ -15,7 +15,7 @@ async function run() {
     process.exit(1);
   }
 
-  const endpoint = `${TEST_URL.replace(/\\/$/, "")}/api/honeypot`;
+  const endpoint = `${TEST_URL.replace(/\/$/, "")}/api/honeypot`;
   const sessionId = "test-session-002";
   const history: { sender: string; text: string; timestamp: string }[] = [];
 
