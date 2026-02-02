@@ -1,0 +1,29 @@
+{
+  "name": "agentic-honeypot",
+  "version": "1.0.0",
+  "description": "Agentic Honey-Pot for Scam Detection & Intelligence Extraction",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "test:conversation": "ts-node src/tests/testConversation.ts",
+    "test:endpoint": "tsx src/tests/testEndpoint.ts",
+    "test:two": "tsx src/tests/testTwoTurns.ts",
+    "gen:key": "tsx src/scripts/genApiKey.ts"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.11.30",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.4.5"
+  }
+}
