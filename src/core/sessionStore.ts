@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { ExtractedIntelligence } from "./extractor";
 import { GoalFlags, Intent, SessionMode, SessionState, StorySummary } from "./planner";
+import { Persona, createPersona } from "./persona";
 
 export type EngagementMetrics = {
   mode: SessionMode;
@@ -18,6 +19,7 @@ export type SessionMemory = {
   engagement: EngagementMetrics;
   story: StorySummary;
   extractedIntelligence: ExtractedIntelligence;
+  persona: Persona;
   goalFlags: GoalFlags;
   lastIntents: Intent[];
   lastReplies: string[];
@@ -87,7 +89,14 @@ export class SessionStore {
 
   getOrCreate(sessionId: string, timestamp: string): SessionMemory {
     const existing = this.sessions.get(sessionId);
-    if (existing) return existing;
+    if (existing) {
+      if (!existing.persona) existing.persona = createPersona();
+      if (!existing.goalFlags) existing.goalFlags = { ...DEFAULT_GOALS };
+      if (!existing.lastIntents) existing.lastIntents = [];
+      if (!existing.lastReplies) existing.lastReplies = [];
+      this.update(existing);
+      return existing;
+    }
 
     const fresh: SessionMemory = {
       sessionId,
@@ -102,6 +111,7 @@ export class SessionStore {
       },
       story: { ...DEFAULT_STORY },
       extractedIntelligence: { ...DEFAULT_EXTRACTED },
+      persona: createPersona(),
       goalFlags: { ...DEFAULT_GOALS },
       lastIntents: [],
       lastReplies: [],

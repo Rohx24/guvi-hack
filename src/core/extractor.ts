@@ -47,6 +47,7 @@ const suspiciousKeywordList = [
 const phoneRegex = /(?:\+91[\s-]?)?(?:0)?[6-9]\d{9}/g;
 const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[A-Za-z]{2,}/g;
 const urlRegex = /https?:\/\/[^\s/$.?#].[^\s]*/gi;
+const paymentLinkRegex = /(?:upi:\/\/pay|payto:)[^\s]+/gi;
 const upiRegex = /[a-zA-Z0-9._-]{2,}@(upi|ybl|okhdfcbank|oksbi|okicici|okaxis|okpaytm|paytm|ibl|axl|sbi|hdfcbank|icici|kotak|baroda|upiicici)/gi;
 const longDigitRegex = /\b\d{10,}\b/g;
 
@@ -74,6 +75,7 @@ export function extractIntelligence(texts: string[]): ExtractedIntelligence {
   const phones = normalized.match(phoneRegex) || [];
   const emails = normalized.match(emailRegex) || [];
   const urls = combined.match(urlRegex) || [];
+  const payLinks = combined.match(paymentLinkRegex) || [];
   const upiIds = normalized.match(upiRegex) || [];
   const longDigits = normalized.match(longDigitRegex) || [];
 
@@ -82,7 +84,7 @@ export function extractIntelligence(texts: string[]): ExtractedIntelligence {
   return {
     bankAccounts: uniqueMerge([], longDigits),
     upiIds: uniqueMerge([], upiIds),
-    phishingLinks: uniqueMerge([], urls),
+    phishingLinks: uniqueMerge([], [...urls, ...payLinks]),
     phoneNumbers: uniqueMerge([], phones),
     emails: uniqueMerge([], emails),
     suspiciousKeywords: uniqueMerge([], suspicious)

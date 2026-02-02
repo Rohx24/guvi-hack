@@ -1,4 +1,5 @@
 import { SessionState, StorySummary } from "./planner";
+import type { Persona } from "./persona";
 
 export type WriterInput = {
   nextIntent:
@@ -115,4 +116,36 @@ export function writeReply(input: WriterInput): string {
   }
 
   return selected;
+}
+
+const forbidden = ["scam", "fraud", "honeypot", "ai", "bot", "police complaint", "report"];
+
+function isValidReply(reply: string, lastReplies: string[]): boolean {
+  if (!reply) return false;
+  if (reply.length > 240) return false;
+  const lower = reply.toLowerCase();
+  if (forbidden.some((word) => lower.includes(word))) return false;
+  if (lastReplies.includes(reply)) return false;
+  return true;
+}
+
+export type OpenAIWriter = (
+  input: WriterInput,
+  persona: Persona,
+  conversationSummary: string
+) => Promise<string>;
+
+export async function writeReplySmart(
+  input: WriterInput,
+  persona: Persona,
+  summary: string,
+  openaiWriter: OpenAIWriter
+): Promise<string> {
+  try {
+    const reply = await openaiWriter(input, persona, summary);
+    if (isValidReply(reply, input.lastReplies)) return reply;
+  } catch (err) {
+    // fallback below
+  }
+  return writeReply(input);
 }

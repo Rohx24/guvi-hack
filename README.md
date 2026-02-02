@@ -15,6 +15,9 @@ npm install
 Create a `.env` file (you can copy `.env.example`):
 ```bash
 API_KEY=your-secret-key
+OPENAI_API_KEY=your-openai-key
+LLM_MODEL=gpt-4o-mini
+OPENAI_TIMEOUT_MS=2800
 PORT=3000
 SESSION_PERSIST=false
 SESSIONS_FILE=sessions.json
@@ -49,6 +52,11 @@ TEST_URL=https://<render>.onrender.com API_KEY=your-secret-key npm run test:endp
 ## GUVI Tester Inputs
 - Honeypot API Endpoint URL: `https://<render>.onrender.com/api/honeypot`
 - x-api-key: `<API_KEY>`
+
+## OpenAI Writer Layer
+- The OpenAI model is used only to phrase replies. Strategy remains deterministic.
+- If `OPENAI_API_KEY` is missing or OpenAI times out, the API falls back to the local template writer.
+- Keep `OPENAI_TIMEOUT_MS` low for latency (default 2800ms).
 
 ## Endpoint
 `POST /api/honeypot`
@@ -116,6 +124,7 @@ It retries up to 2 times with a 5s timeout.
 
 ## Deployment Notes
 - Set `API_KEY` in your hosting environment.
+- Set `OPENAI_API_KEY` if you want the OpenAI phrasing layer enabled.
 - Ensure outbound HTTPS is allowed for the final callback.
 - If you want persistence, set `SESSION_PERSIST=true` and ensure `SESSIONS_FILE` is writable.
 - Recommended Node.js 18+ for built-in `fetch`.

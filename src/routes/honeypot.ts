@@ -2,9 +2,11 @@ import { Router, Request, Response } from "express";
 import { extractIntelligence, mergeIntelligence, normalizeText } from "../core/extractor";
 import { computeScores } from "../core/scoring";
 import { planNext } from "../core/planner";
-import { writeReply } from "../core/writer";
+import { writeReplySmart } from "../core/writer";
 import { SessionStore } from "../core/sessionStore";
 import { sendFinalCallback } from "../core/callback";
+import { summarize } from "../core/summarizer";
+import { generateReplyOpenAI } from "../core/openaiWriter";
 
 const router = Router();
 const store = new SessionStore();
@@ -71,14 +73,20 @@ router.post("/honeypot", async (req: Request, res: Response) => {
     lastIntents: session.lastIntents
   });
 
-  const reply = writeReply({
-    nextIntent: planner.nextIntent,
-    state: planner.updatedState,
-    stressScore: scores.stressScore,
-    lastScammerMessage: body.message.text,
-    story: session.story,
-    lastReplies: session.lastReplies
-  });
+  const summary = summarize(body.conversationHistory || [], merged, session.story, session.persona);
+  const reply = await writeReplySmart(
+    {
+      nextIntent: planner.nextIntent,
+      state: planner.updatedState,
+      stressScore: scores.stressScore,
+      lastScammerMessage: body.message.text,
+      story: session.story,
+      lastReplies: session.lastReplies
+    },
+    session.persona,
+    summary,
+    generateReplyOpenAI
+  );
 
   const now = new Date().toISOString();
   session.state = planner.updatedState;

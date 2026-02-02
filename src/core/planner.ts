@@ -104,11 +104,18 @@ export function planNext(input: PlannerInput): PlannerOutput {
   const needsPhoneOrEmail = !goalFlags.gotPhoneOrEmail;
   const disallow = new Set<Intent>();
 
-  if (goalFlags.gotUpiId && goalFlags.gotPaymentLink) {
+  if (goalFlags.gotUpiId || goalFlags.gotPaymentLink) {
     disallow.add("request_link_or_upi");
   }
 
-  if ((needsUPI || needsLink || needsPhoneOrEmail) && !disallow.has("request_link_or_upi")) {
+  const earlyTurns = engagement.totalMessagesExchanged <= 2;
+  const scammerAlreadySharedLinkOrUpi = goalFlags.gotUpiId || goalFlags.gotPaymentLink;
+
+  if (
+    (needsUPI || needsLink || needsPhoneOrEmail) &&
+    !disallow.has("request_link_or_upi") &&
+    (!earlyTurns || scammerAlreadySharedLinkOrUpi)
+  ) {
     nextIntent = "request_link_or_upi";
   }
 
