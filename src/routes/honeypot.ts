@@ -8,6 +8,7 @@ import { sendFinalCallback } from "../core/callback";
 import { summarize } from "../core/summarizer";
 import { generateReplyOpenAI } from "../core/openaiWriter";
 import { makeFullSchema } from "../utils/guviSchema";
+import { logTurn } from "../utils/conversationLogger";
 
 const router = Router();
 const store = new SessionStore();
@@ -35,6 +36,17 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   const apiKey = req.header("x-api-key");
   const expectedKey = process.env.API_KEY || "";
   if (expectedKey && (!apiKey || apiKey !== expectedKey)) {
+    try {
+      const pingText = body?.message?.text;
+      if (!pingText || typeof pingText !== "string" || pingText.trim().length === 0) {
+        console.log("[HONEYPOT][PING] Empty body / tester probe");
+      } else {
+        const sessionId = body?.sessionId || "tester-session";
+        logTurn({ sessionId, turn: 1, role: "SCAMMER", text: pingText });
+      }
+    } catch {
+      // swallow logging errors
+    }
     return res.status(200).json(
       makeFullSchema({
         status: "error",
@@ -47,6 +59,11 @@ router.post("/honeypot", async (req: Request, res: Response) => {
 
   const text = body?.message?.text;
   if (!text || typeof text !== "string" || text.trim().length === 0) {
+    try {
+      console.log("[HONEYPOT][PING] Empty body / tester probe");
+    } catch {
+      // swallow logging errors
+    }
     return res
       .status(200)
       .json(
@@ -99,6 +116,9 @@ router.post("/honeypot", async (req: Request, res: Response) => {
 
   const historyTexts = conversationHistory.map((m) => m.text);
   const texts = [messageText, ...historyTexts];
+
+  const turnNumber = Math.max(1, Math.floor(session.engagement.totalMessagesExchanged / 2) + 1);
+  logTurn({ sessionId: session.sessionId, turn: turnNumber, role: "SCAMMER", text: messageText });
 
   const normalized = normalizeText(messageText);
   const extracted = extractIntelligence(texts);
@@ -162,6 +182,7 @@ router.post("/honeypot", async (req: Request, res: Response) => {
     summary,
     generateReplyOpenAI
   );
+  logTurn({ sessionId: session.sessionId, turn: turnNumber, role: "HONEYPOT", text: reply });
 
   const now = new Date().toISOString();
   session.state = planner.updatedState;
