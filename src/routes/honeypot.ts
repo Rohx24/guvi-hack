@@ -15,48 +15,40 @@ function badRequest(res: Response, message: string) {
   return res.status(400).json({ status: "error", message });
 }
 
-function testerResponse(sessionId?: string) {
-  const now = new Date().toISOString();
-  return {
-    status: "success",
-    sessionId: sessionId || "tester-session",
-    scamDetected: false,
-    scamScore: 0,
-    stressScore: 0,
-    engagement: {
-      mode: "SAFE",
-      totalMessagesExchanged: 0,
-      agentMessagesSent: 0,
-      scammerMessagesReceived: 0,
-      startedAt: now,
-      lastMessageAt: now
-    },
-    reply: "OK",
-    extractedIntelligence: {
-      bankAccounts: [],
-      upiIds: [],
-      phishingLinks: [],
-      phoneNumbers: [],
-      emails: [],
-      suspiciousKeywords: []
-    },
-    agentNotes: "GUVI endpoint tester ping / missing message.text"
-  };
-}
-
-router.get("/honeypot", (req: Request, res: Response) => {
-  return res.status(200).json(testerResponse(typeof req.query.sessionId === "string" ? req.query.sessionId : undefined));
-});
-
 router.post("/honeypot", async (req: Request, res: Response) => {
-  const body: any = req.body ?? {};
-  const msgText = body?.message?.text;
+  // GUVI tester compatibility: allow empty/minimal body without failing.
+  const bodyForGuard = (req.body ?? {}) as { message?: { text?: unknown } };
+  const msgText = bodyForGuard?.message?.text;
   if (!msgText || typeof msgText !== "string") {
-    console.log("[GUVI TESTER]", req.method, req.originalUrl, req.headers["content-type"], Object.keys(body || {}));
-    return res.status(200).json(testerResponse(body?.sessionId));
+    const now = new Date().toISOString();
+    return res.json({
+      status: "success",
+      sessionId: `guvi-${Date.now()}`,
+      scamDetected: false,
+      scamScore: 0,
+      stressScore: 0,
+      engagement: {
+        mode: "SAFE",
+        totalMessagesExchanged: 0,
+        agentMessagesSent: 0,
+        scammerMessagesReceived: 0,
+        startedAt: now,
+        lastMessageAt: now
+      },
+      reply: "Hello",
+      extractedIntelligence: {
+        bankAccounts: [],
+        upiIds: [],
+        phishingLinks: [],
+        phoneNumbers: [],
+        emails: [],
+        suspiciousKeywords: []
+      },
+      agentNotes: ""
+    });
   }
 
-  const bodyTyped = (req.body || {}) as {
+  const body = (req.body || {}) as {
     sessionId?: string;
     message?: { sender?: "scammer" | "user"; text?: string; timestamp?: string } | string;
     text?: string;
@@ -65,28 +57,28 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   };
 
   const nowIso = new Date().toISOString();
-  const sessionId = bodyTyped.sessionId || `tester-${Date.now()}`;
+  const sessionId = body.sessionId || `tester-${Date.now()}`;
 
   let messageText = "";
   let messageSender: "scammer" | "user" = "scammer";
   let messageTimestamp = nowIso;
 
-  if (typeof bodyTyped.message === "string") {
-    messageText = bodyTyped.message;
-  } else if (bodyTyped.message) {
-    messageText = bodyTyped.message.text || "";
-    messageSender = bodyTyped.message.sender || "scammer";
-    messageTimestamp = bodyTyped.message.timestamp || nowIso;
-  } else if (bodyTyped.text) {
-    messageText = bodyTyped.text;
+  if (typeof body.message === "string") {
+    messageText = body.message;
+  } else if (body.message) {
+    messageText = body.message.text || "";
+    messageSender = body.message.sender || "scammer";
+    messageTimestamp = body.message.timestamp || nowIso;
+  } else if (body.text) {
+    messageText = body.text;
   }
 
   if (!messageText) {
     messageText = "hello";
   }
 
-  const conversationHistory = bodyTyped.conversationHistory || [];
-  const metadata = bodyTyped.metadata || { channel: "SMS", language: "English", locale: "IN" };
+  const conversationHistory = body.conversationHistory || [];
+  const metadata = body.metadata || { channel: "SMS", language: "English", locale: "IN" };
 
   const session = store.getOrCreate(sessionId, messageTimestamp);
 
