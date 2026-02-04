@@ -44,14 +44,18 @@ function testerResponse(sessionId?: string) {
   };
 }
 
+router.options("/honeypot", (_req: Request, res: Response) => {
+  return res.sendStatus(204);
+});
+
 router.get("/honeypot", (req: Request, res: Response) => {
   return res.status(200).json(testerResponse(typeof req.query.sessionId === "string" ? req.query.sessionId : undefined));
 });
 
 router.post("/honeypot", async (req: Request, res: Response) => {
   const body: any = req.body ?? {};
-  const msgText = body?.message?.text;
-  if (!msgText || typeof msgText !== "string") {
+  const text = body?.message?.text;
+  if (!text || typeof text !== "string") {
     console.log("[GUVI]", req.method, req.originalUrl, req.headers["content-type"], typeof req.body);
     return res.status(200).json(testerResponse(body?.sessionId));
   }
