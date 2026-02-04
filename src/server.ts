@@ -6,11 +6,11 @@ import honeypotRouter from "./routes/honeypot";
 dotenv.config();
 
 const app = express();
-app.use(cors());
-app.use(express.json({ limit: "1mb", type: "*/*" }));
+app.use(cors({ allowedHeaders: ["x-api-key", "content-type"] }));
+app.use(express.json({ limit: "2mb", type: "*/*" }));
 app.use(express.urlencoded({ extended: true }));
 app.use((req, _res, next) => {
-  if (req.body === undefined) req.body = {};
+  if (req.body === undefined || req.body === null) req.body = {};
   next();
 });
 
