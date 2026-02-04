@@ -52,7 +52,7 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   const body: any = req.body ?? {};
   const msgText = body?.message?.text;
   if (!msgText || typeof msgText !== "string") {
-    console.log("[GUVI]", req.method, req.originalUrl, req.headers["content-type"], typeof req.body);
+    console.log("[GUVI TESTER]", req.method, req.originalUrl, req.headers["content-type"], Object.keys(body || {}));
     return res.status(200).json(testerResponse(body?.sessionId));
   }
 
