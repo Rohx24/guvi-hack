@@ -17,9 +17,7 @@ function badRequest(res: Response, message: string) {
 
 router.post("/honeypot", async (req: Request, res: Response) => {
   // GUVI tester compatibility: allow empty/minimal body without failing.
-  const bodyForGuard = (req.body ?? {}) as { message?: { text?: unknown } };
-  const msgText = bodyForGuard?.message?.text;
-  if (!msgText || typeof msgText !== "string") {
+  if (!req.body || !req.body.message || !req.body.message.text) {
     const now = new Date().toISOString();
     return res.json({
       status: "success",
