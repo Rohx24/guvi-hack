@@ -114,19 +114,13 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   const planner = planNext({
     scamScore: scores.scamScore,
     stressScore: scores.stressScore,
-    signals: scores.signals,
     state: session.state,
     engagement: { totalMessagesExchanged: projectedTotal },
     extracted: merged,
     story: session.story,
     maxTurns,
     goalFlags: session.goalFlags,
-    lastIntents: session.lastIntents,
-    phase: session.phase,
-    convictionToComply: session.convictionToComply,
-    askedVerification: session.askedVerification,
-    lastFriction: session.lastFriction,
-    normalizedText: normalized
+    lastIntents: session.lastIntents
   });
 
   const summary = summarize(conversationHistory, merged, session.story, session.persona);
@@ -138,9 +132,7 @@ router.post("/honeypot", async (req: Request, res: Response) => {
       lastScammerMessage: messageText,
       story: session.story,
       lastReplies: session.lastReplies,
-      turnNumber: projectedTotal,
-      phase: planner.nextPhase,
-      lastFriction: planner.nextFriction
+      turnNumber: projectedTotal
     },
     session.persona,
     summary,
@@ -156,11 +148,7 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   session.engagement.mode = planner.mode;
   session.engagement.lastMessageAt = now;
   session.agentNotes = planner.agentNotes;
-  session.phase = planner.nextPhase;
-  session.convictionToComply = planner.nextConvictionToComply;
-  session.askedVerification = planner.nextAskedVerification;
-  session.lastFriction = planner.nextFriction;
-  session.lastIntents = [...session.lastIntents, planner.nextIntent].slice(-5);
+  session.lastIntents = [...session.lastIntents, planner.nextIntent].slice(-6);
   session.lastReplies = [...session.lastReplies, reply].slice(-3);
 
   if (!session.story.scammerClaim && scores.signals.authority > 0) {

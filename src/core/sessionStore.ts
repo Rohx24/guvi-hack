@@ -20,10 +20,6 @@ export type SessionMemory = {
   story: StorySummary;
   extractedIntelligence: ExtractedIntelligence;
   persona: Persona;
-  phase: "SHOCK" | "PUSHBACK" | "OVERWHELM" | "NEAR_COMPLY" | "EXIT";
-  convictionToComply: number;
-  askedVerification: boolean;
-  lastFriction: string;
   goalFlags: GoalFlags;
   lastIntents: Intent[];
   lastReplies: string[];
@@ -95,10 +91,6 @@ export class SessionStore {
     const existing = this.sessions.get(sessionId);
     if (existing) {
       if (!existing.persona) existing.persona = createPersona();
-      if (!existing.phase) existing.phase = "SHOCK";
-      if (existing.convictionToComply === undefined) existing.convictionToComply = 0.2;
-      if (existing.askedVerification === undefined) existing.askedVerification = false;
-      if (!existing.lastFriction) existing.lastFriction = "otp_not_received";
       if (!existing.goalFlags) existing.goalFlags = { ...DEFAULT_GOALS };
       if (!existing.lastIntents) existing.lastIntents = [];
       if (!existing.lastReplies) existing.lastReplies = [];
@@ -120,10 +112,6 @@ export class SessionStore {
       story: { ...DEFAULT_STORY },
       extractedIntelligence: { ...DEFAULT_EXTRACTED },
       persona: createPersona(),
-      phase: "SHOCK",
-      convictionToComply: 0.2,
-      askedVerification: false,
-      lastFriction: "otp_not_received",
       goalFlags: { ...DEFAULT_GOALS },
       lastIntents: [],
       lastReplies: [],
