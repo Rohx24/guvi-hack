@@ -123,6 +123,34 @@ export class SessionStore {
     return fresh;
   }
 
+  get(sessionId: string): SessionMemory | undefined {
+    return this.sessions.get(sessionId);
+  }
+
+  resetSession(session: SessionMemory, timestamp: string): SessionMemory {
+    const reset: SessionMemory = {
+      ...session,
+      state: { ...DEFAULT_STATE },
+      engagement: {
+        mode: "SAFE",
+        totalMessagesExchanged: 0,
+        agentMessagesSent: 0,
+        scammerMessagesReceived: 0,
+        startedAt: timestamp,
+        lastMessageAt: timestamp
+      },
+      story: { ...DEFAULT_STORY },
+      extractedIntelligence: { ...DEFAULT_EXTRACTED },
+      goalFlags: { ...DEFAULT_GOALS },
+      lastIntents: [],
+      lastReplies: [],
+      agentNotes: ""
+    };
+    this.sessions.set(session.sessionId, reset);
+    this.saveToFile();
+    return reset;
+  }
+
   update(session: SessionMemory): void {
     this.sessions.set(session.sessionId, session);
     this.saveToFile();

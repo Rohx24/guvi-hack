@@ -15,38 +15,43 @@ function badRequest(res: Response, message: string) {
   return res.status(400).json({ status: "error", message });
 }
 
+function testerResponse(sessionId?: string, agentNotes: string = "tester_ping_no_message") {
+  const now = new Date().toISOString();
+  return {
+    status: "success",
+    sessionId: sessionId || "tester-session",
+    scamDetected: false,
+    scamScore: 0,
+    stressScore: 0,
+    engagement: {
+      mode: "SAFE",
+      totalMessagesExchanged: 0,
+      agentMessagesSent: 0,
+      scammerMessagesReceived: 0,
+      startedAt: now,
+      lastMessageAt: now
+    },
+    reply: "OK",
+    extractedIntelligence: {
+      bankAccounts: [],
+      upiIds: [],
+      phishingLinks: [],
+      phoneNumbers: [],
+      emails: [],
+      suspiciousKeywords: []
+    },
+    agentNotes
+  };
+}
+
 router.post("/honeypot", async (req: Request, res: Response) => {
-  // GUVI tester compatibility: allow empty/minimal body without failing.
-  if (!req.body || !req.body.message || !req.body.message.text) {
-    const now = new Date().toISOString();
-    return res.json({
-      status: "success",
-      sessionId: `guvi-${Date.now()}`,
-      scamDetected: false,
-      scamScore: 0,
-      stressScore: 0,
-      engagement: {
-        mode: "SAFE",
-        totalMessagesExchanged: 0,
-        agentMessagesSent: 0,
-        scammerMessagesReceived: 0,
-        startedAt: now,
-        lastMessageAt: now
-      },
-      reply: "Hello",
-      extractedIntelligence: {
-        bankAccounts: [],
-        upiIds: [],
-        phishingLinks: [],
-        phoneNumbers: [],
-        emails: [],
-        suspiciousKeywords: []
-      },
-      agentNotes: ""
-    });
+  const body: any = req.body ?? {};
+  const text = body?.message?.text;
+  if (!text || typeof text !== "string") {
+    return res.status(200).json(testerResponse(body?.sessionId));
   }
 
-  const body = (req.body || {}) as {
+  const bodyTyped = (req.body || {}) as {
     sessionId?: string;
     message?: { sender?: "scammer" | "user"; text?: string; timestamp?: string } | string;
     text?: string;
@@ -55,30 +60,41 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   };
 
   const nowIso = new Date().toISOString();
-  const sessionId = body.sessionId || `tester-${Date.now()}`;
+  const sessionId = bodyTyped.sessionId || `tester-${Date.now()}`;
 
   let messageText = "";
   let messageSender: "scammer" | "user" = "scammer";
   let messageTimestamp = nowIso;
 
-  if (typeof body.message === "string") {
-    messageText = body.message;
-  } else if (body.message) {
-    messageText = body.message.text || "";
-    messageSender = body.message.sender || "scammer";
-    messageTimestamp = body.message.timestamp || nowIso;
-  } else if (body.text) {
-    messageText = body.text;
+  if (typeof bodyTyped.message === "string") {
+    messageText = bodyTyped.message;
+  } else if (bodyTyped.message) {
+    messageText = bodyTyped.message.text || "";
+    messageSender = bodyTyped.message.sender || "scammer";
+    messageTimestamp = bodyTyped.message.timestamp || nowIso;
+  } else if (bodyTyped.text) {
+    messageText = bodyTyped.text;
   }
 
   if (!messageText) {
-    messageText = "hello";
+    return res.status(200).json(testerResponse(sessionId, "tester_ping_no_message"));
   }
 
-  const conversationHistory = body.conversationHistory || [];
-  const metadata = body.metadata || { channel: "SMS", language: "English", locale: "IN" };
+  const conversationHistory = bodyTyped.conversationHistory || [];
+  const metadata = bodyTyped.metadata || { channel: "SMS", language: "English", locale: "IN" };
 
-  const session = store.getOrCreate(sessionId, messageTimestamp);
+  let session = store.get(sessionId);
+  if (!session) {
+    session = store.getOrCreate(sessionId, messageTimestamp);
+  } else {
+    const lastAt = new Date(session.engagement.lastMessageAt).getTime();
+    const tooOld = Date.now() - lastAt > 10 * 60 * 1000;
+    const emptyHistory = (!conversationHistory || conversationHistory.length === 0) &&
+      session.engagement.totalMessagesExchanged > 0;
+    if (session.engagement.mode === "COMPLETE" || tooOld || emptyHistory) {
+      session = store.resetSession(session, messageTimestamp);
+    }
+  }
 
   const historyTexts = conversationHistory.map((m) => m.text);
   const texts = [messageText, ...historyTexts];
@@ -110,12 +126,11 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   };
 
   const maxTurns = Number(process.env.MAX_TURNS || 14);
-  const projectedTotal = session.engagement.totalMessagesExchanged + 1;
   const planner = planNext({
     scamScore: scores.scamScore,
     stressScore: scores.stressScore,
     state: session.state,
-    engagement: { totalMessagesExchanged: projectedTotal },
+    engagement: { totalMessagesExchanged: session.engagement.totalMessagesExchanged },
     extracted: merged,
     story: session.story,
     maxTurns,
@@ -132,7 +147,7 @@ router.post("/honeypot", async (req: Request, res: Response) => {
       lastScammerMessage: messageText,
       story: session.story,
       lastReplies: session.lastReplies,
-      turnNumber: projectedTotal
+      turnNumber: session.engagement.totalMessagesExchanged + 1
     },
     session.persona,
     summary,
@@ -142,14 +157,21 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   const now = new Date().toISOString();
   session.state = planner.updatedState;
   session.extractedIntelligence = merged;
-  session.engagement.totalMessagesExchanged = projectedTotal;
   if (messageSender === "scammer") session.engagement.scammerMessagesReceived += 1;
-  if (messageSender === "scammer") session.engagement.agentMessagesSent += 1;
+  session.engagement.agentMessagesSent += 1;
+  session.engagement.totalMessagesExchanged =
+    session.engagement.scammerMessagesReceived + session.engagement.agentMessagesSent;
   session.engagement.mode = planner.mode;
   session.engagement.lastMessageAt = now;
   session.agentNotes = planner.agentNotes;
   session.lastIntents = [...session.lastIntents, planner.nextIntent].slice(-6);
   session.lastReplies = [...session.lastReplies, reply].slice(-3);
+  console.log("[TURN]", session.sessionId, {
+    scammerMessagesReceived: session.engagement.scammerMessagesReceived,
+    agentMessagesSent: session.engagement.agentMessagesSent,
+    totalMessagesExchanged: session.engagement.totalMessagesExchanged,
+    mode: session.engagement.mode
+  });
 
   if (!session.story.scammerClaim && scores.signals.authority > 0) {
     session.story.scammerClaim = "authority claim";

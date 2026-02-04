@@ -143,14 +143,12 @@ export function planNext(input: PlannerInput): PlannerOutput {
     nextIntent = "ask_for_official_id_softly";
   }
 
-  if (
-    scamDetected &&
-    (goalFlags.gotUpiId || goalFlags.gotPaymentLink) &&
-    goalFlags.gotExplicitOtpAsk &&
-    engagement.totalMessagesExchanged >= 8
-  ) {
-    mode = "COMPLETE";
-  } else if (engagement.totalMessagesExchanged >= maxTurns) {
+  const actionable =
+    goalFlags.gotUpiId ||
+    goalFlags.gotPaymentLink ||
+    goalFlags.gotBankAccountLikeDigits ||
+    goalFlags.gotPhoneOrEmail;
+  if (engagement.totalMessagesExchanged >= maxTurns || (scamDetected && actionable && engagement.totalMessagesExchanged >= 8)) {
     mode = "COMPLETE";
   }
 
