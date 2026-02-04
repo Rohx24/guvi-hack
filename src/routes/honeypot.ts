@@ -7,41 +7,22 @@ import { SessionStore } from "../core/sessionStore";
 import { sendFinalCallback } from "../core/callback";
 import { summarize } from "../core/summarizer";
 import { generateReplyOpenAI } from "../core/openaiWriter";
+import { makeFullSchema } from "../utils/guviSchema";
 
 const router = Router();
 const store = new SessionStore();
 
 function testerResponse(sessionId?: string, agentNotes: string = "tester_ping_no_message") {
-  const now = new Date().toISOString();
-  return {
+  return makeFullSchema({
     status: "success",
     sessionId: sessionId || "tester-session",
-    scamDetected: false,
-    scamScore: 0,
-    stressScore: 0,
-    engagement: {
-      mode: "SAFE",
-      totalMessagesExchanged: 0,
-      agentMessagesSent: 0,
-      scammerMessagesReceived: 0,
-      startedAt: now,
-      lastMessageAt: now
-    },
-    reply: "tester ping",
-    extractedIntelligence: {
-      bankAccounts: [],
-      upiIds: [],
-      phishingLinks: [],
-      phoneNumbers: [],
-      emails: [],
-      suspiciousKeywords: []
-    },
+    reply: "OK",
     agentNotes
-  };
+  });
 }
 
 router.options("/honeypot", (_req: Request, res: Response) => {
-  return res.status(204).send();
+  return res.status(200).json(makeFullSchema({ status: "success", agentNotes: "tester_probe" }));
 });
 
 router.get("/honeypot", (req: Request, res: Response) => {
@@ -54,12 +35,28 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   const apiKey = req.header("x-api-key");
   const expectedKey = process.env.API_KEY || "";
   if (expectedKey && (!apiKey || apiKey !== expectedKey)) {
-    return res.status(200).json(testerResponse(body?.sessionId, "invalid_api_key"));
+    return res.status(200).json(
+      makeFullSchema({
+        status: "error",
+        sessionId: body?.sessionId || "tester-session",
+        reply: "OK",
+        agentNotes: "Invalid API key"
+      })
+    );
   }
 
   const text = body?.message?.text;
   if (!text || typeof text !== "string" || text.trim().length === 0) {
-    return res.status(200).json(testerResponse(body?.sessionId, "tester_ping_no_message"));
+    return res
+      .status(200)
+      .json(
+        makeFullSchema({
+          status: "success",
+          sessionId: body?.sessionId || "tester-session",
+          agentNotes: "tester_ping",
+          reply: "OK"
+        })
+      );
   }
 
   const bodyTyped = (req.body || {}) as {
