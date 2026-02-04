@@ -38,6 +38,7 @@ export type GoalFlags = {
 export type PlannerInput = {
   scamScore: number;
   stressScore: number;
+  scamDetected: boolean;
   state: SessionState;
   engagement: {
     totalMessagesExchanged: number;
@@ -82,12 +83,10 @@ function pickAlternateIntent(
 }
 
 export function planNext(input: PlannerInput): PlannerOutput {
-  const { scamScore, stressScore, state, engagement, extracted, story, maxTurns, goalFlags, lastIntents } = input;
-  let mode: SessionMode = "SAFE";
-  if (scamScore >= 0.75) mode = "SCAM_CONFIRMED";
-  else if (scamScore >= 0.45) mode = "SUSPECT";
-
-  const scamDetected = mode === "SCAM_CONFIRMED" || scamScore >= 0.7;
+  const { scamScore, stressScore, scamDetected, state, engagement, story, goalFlags, lastIntents } =
+    input;
+  let mode: SessionMode = scamDetected ? "SCAM_CONFIRMED" : "SAFE";
+  if (!scamDetected && scamScore >= 0.45) mode = "SUSPECT";
 
   const updatedState: SessionState = {
     anxiety: clamp01(state.anxiety + (scamScore > 0.6 ? 0.1 : 0.02)),
@@ -99,9 +98,6 @@ export function planNext(input: PlannerInput): PlannerOutput {
 
   let nextIntent: Intent = "clarify_procedure";
 
-  const needsUPI = !goalFlags.gotUpiId;
-  const needsLink = !goalFlags.gotPaymentLink;
-  const needsPhoneOrEmail = !goalFlags.gotPhoneOrEmail;
   const disallow = new Set<Intent>();
 
   if (goalFlags.gotUpiId || goalFlags.gotPaymentLink || goalFlags.gotBankAccountLikeDigits) {
@@ -109,16 +105,9 @@ export function planNext(input: PlannerInput): PlannerOutput {
   }
 
   const earlyTurns = engagement.totalMessagesExchanged <= 2;
-  const scammerAlreadySharedLinkOrUpi = goalFlags.gotUpiId || goalFlags.gotPaymentLink;
 
   if (earlyTurns) {
     nextIntent = stressScore > 0.6 ? "seek_reassurance" : "clarify_procedure";
-  } else if (
-    (needsUPI || needsLink || needsPhoneOrEmail) &&
-    !disallow.has("request_link_or_upi") &&
-    scammerAlreadySharedLinkOrUpi
-  ) {
-    nextIntent = "request_link_or_upi";
   }
 
   if (goalFlags.gotUpiId || goalFlags.gotPaymentLink || goalFlags.gotBankAccountLikeDigits) {
@@ -143,15 +132,6 @@ export function planNext(input: PlannerInput): PlannerOutput {
     nextIntent = "ask_for_official_id_softly";
   }
 
-  const actionable =
-    goalFlags.gotUpiId ||
-    goalFlags.gotPaymentLink ||
-    goalFlags.gotBankAccountLikeDigits ||
-    goalFlags.gotPhoneOrEmail;
-  if (engagement.totalMessagesExchanged >= maxTurns || (scamDetected && actionable && engagement.totalMessagesExchanged >= 8)) {
-    mode = "COMPLETE";
-  }
-
   if (intentRepeated(nextIntent, lastIntents)) {
     const preferredFallbacks: Intent[] = [
       "pretend_technical_issue",
@@ -159,8 +139,7 @@ export function planNext(input: PlannerInput): PlannerOutput {
       "delay_busy",
       "clarify_procedure",
       "ask_for_official_id_softly",
-      "partial_comply_fake_info",
-      "request_link_or_upi"
+      "partial_comply_fake_info"
     ];
     nextIntent = pickAlternateIntent(preferredFallbacks, lastIntents, disallow);
   }

@@ -19,128 +19,91 @@ export type WriterInput = {
   turnNumber: number;
 };
 
-const templates: Record<WriterInput["nextIntent"], string[]> = {
-  clarify_procedure: [
-    "Wait… tell step by step, I’m lost.",
-    "I didn’t get it. What first?",
-    "Slowly please. One by one.",
-    "Explain again? I’m not getting.",
-    "I missed it… can you repeat?",
-    "What do I do first?",
-    "Just say the steps, simple.",
-    "I’m stuck, what now?",
-    "Tell me again, short.",
-    "I’m not clear, then?"
-  ],
-  seek_reassurance: [
-    "Is my account safe right now?",
-    "Please don’t block it, okay?",
-    "Tell me it will be fine.",
-    "Are you sure this fixes it?",
-    "It’s already blocked or not?",
-    "Please stay on line.",
-    "I can’t lose money…",
-    "Just confirm once, please.",
-    "I’m scared, say it’s okay.",
-    "Don’t close it, I’m trying."
-  ],
-  delay_busy: [
-    "I'm outside right now, give me 10 minutes. Don't close the case please.",
-    "I'm in meeting, can I do this after some time?",
-    "I'm driving now, I will do it shortly.",
-    "I'm at office, can you call after 15 minutes?",
-    "I'm busy right now, please wait a bit.",
-    "I'm in traffic, please hold on.",
-    "Can I do this in 20 minutes? I'm outside.",
-    "I'm not free now, please don't close it.",
-    "I need few minutes, phone battery low.",
-    "I'm with family, can we do later?"
-  ],
-  pretend_technical_issue: [
-    "App not opening… error.",
-    "Link not loading, net slow.",
-    "Page stuck, just spinning.",
-    "It’s asking PIN, not OTP.",
-    "UPI name showing different.",
-    "Paste not working, phone hang.",
-    "It says invalid beneficiary.",
-    "Payment failed, what now?",
-    "Timeout again…",
-    "App stuck, I’ll retry."
-  ],
-  partial_comply_fake_info: [
-    "OTP not received. Resend?",
-    "I entered, it says invalid.",
-    "OTP not coming…",
-    "Typed and it failed.",
-    "It’s asking PIN, I can’t.",
-    "Error after submit.",
-    "Tried once, nothing.",
-    "It says try later.",
-    "Last digits failed.",
-    "Can’t proceed, OTP gone."
-  ],
-  request_link_or_upi: [
-    "Okay, please send the link or UPI ID again. I will check now.",
-    "Can you share the exact UPI or payment link? I will try from my side.",
-    "Please share the correct UPI once more.",
-    "Send me the payment link again, I will open.",
-    "Can you share the UPI ID clearly? I will copy.",
-    "Please resend the link, earlier message not visible.",
-    "I couldn't see the UPI properly, please send again.",
-    "Kindly share the exact payment link.",
-    "Please send the UPI ID once, I will try now.",
-    "Share the link/UPI, I'll check quickly."
-  ],
-  ask_for_official_id_softly: [
-    "Sir, for my record can you share your employee ID or office number?",
-    "Just to be sure, please share official reference number.",
-    "Please share your official ID for verification.",
-    "Can you give me office contact or ID number?",
-    "Please send your employee ID once.",
-    "Kindly share any reference number.",
-    "For safety, can you share office number?",
-    "Please provide an official ID, just for record.",
-    "Can you give me a ticket or reference number?",
-    "Please share official details, I will note."
-  ],
-  confused_resistance: [
-    "Wait… why PIN on chat?",
-    "Earlier OTP, now PIN?",
-    "You already have my details no?",
-    "This step feels different…",
-    "Why link again? I opened it.",
-    "You said verify first, now pay?",
-    "Why you need OTP here?",
-    "This is new to me…",
-    "It’s not how SBI works?",
-    "Hmm… I don’t get this."
-  ]
-};
+const confusionPool = [
+  "Wait, why OTP here? I'm scared.",
+  "I don't understand. Which account is this?",
+  "Why are you asking PIN on chat?",
+  "This doesn't make sense. Who are you exactly?",
+  "I'm confused. What is this about?"
+];
 
-export function writeReply(input: WriterInput): string {
-  const options = templates[input.nextIntent] || templates.clarify_procedure;
-  const available = options.filter((text) => !input.lastReplies.includes(text));
-  const pool = available.length > 0 ? available : options;
-  const index = Math.floor(Math.random() * pool.length);
-  const selected = pool[index];
+const frictionPool = [
+  "OTP not coming. Phone has no network.",
+  "App stuck. It's not opening now.",
+  "It says error. I can't proceed.",
+  "Screen froze. I can't enter anything.",
+  "The page keeps loading. Nothing happens.",
+  "The code field is blank. I can't type.",
+  "It's asking for a PIN. I don't have it."
+];
 
-  if (input.state.anxiety > 0.7 && input.nextIntent === "clarify_procedure") {
-    return "I'm feeling nervous, please explain slowly what I should do.";
-  }
+const delayPool = [
+  "Give me five minutes, I'm outside.",
+  "I'm in a meeting. I'll check shortly.",
+  "Hold on, I'll try again.",
+  "I'm driving. I'll respond soon.",
+  "Let me step aside and try again.",
+  "I need a moment, I'm on another call."
+];
 
-  return selected;
+const forbidden = [
+  "scam",
+  "fraud",
+  "honeypot",
+  "ai",
+  "bot",
+  "phishing",
+  "police",
+  "cybercrime",
+  "rbi",
+  "complaint"
+];
+
+function wordCount(text: string): number {
+  return text.trim().split(/\s+/).filter(Boolean).length;
 }
-
-const forbidden = ["scam", "fraud", "honeypot", "ai", "bot", "police complaint", "report"];
 
 function isValidReply(reply: string, lastReplies: string[]): boolean {
   if (!reply) return false;
-  if (reply.length > 240) return false;
+  if (reply.includes("\n")) return false;
+  if (wordCount(reply) > 12) return false;
+  if (/\d{3,}/.test(reply)) return false;
   const lower = reply.toLowerCase();
   if (forbidden.some((word) => lower.includes(word))) return false;
-  if (lastReplies.includes(reply)) return false;
+  const recent = lastReplies.slice(-3);
+  if (recent.includes(reply)) return false;
   return true;
+}
+
+function chooseBucket(message: string): string[] {
+  const normalized = message.toLowerCase();
+  const hasOtpOrPin = /\b(otp|pin)\b/.test(normalized);
+  const hasPressure = /urgent|blocked|immediately/.test(normalized) || hasOtpOrPin;
+
+  if (hasOtpOrPin) {
+    return Math.random() < 0.5 ? confusionPool : frictionPool;
+  }
+  if (hasPressure) {
+    return Math.random() < 0.5 ? confusionPool : delayPool;
+  }
+  const roll = Math.random();
+  if (roll < 0.4) return delayPool;
+  if (roll < 0.7) return frictionPool;
+  return confusionPool;
+}
+
+function pickReply(pool: string[], lastReplies: string[]): string {
+  const shuffled = [...pool].sort(() => Math.random() - 0.5);
+  for (const candidate of shuffled) {
+    if (isValidReply(candidate, lastReplies)) return candidate;
+  }
+  return "Hold on, I'll try again.";
+}
+
+export function writeReply(input: WriterInput): string {
+  const bucket = chooseBucket(input.lastScammerMessage || "");
+  const reply = pickReply(bucket, input.lastReplies || []);
+  return reply;
 }
 
 export type OpenAIWriter = (
@@ -149,35 +112,11 @@ export type OpenAIWriter = (
   conversationSummary: string
 ) => Promise<string>;
 
-function emotionalStage(turnNumber: number): "early" | "middle" | "late" {
-  if (turnNumber <= 2) return "early";
-  if (turnNumber <= 6) return "middle";
-  return "late";
-}
-
-function shouldUseConfusedResistance(input: WriterInput): boolean {
-  const stressy = input.stressScore > 0.6;
-  const otpAsk = /otp|pin|password|cvv|account|upi/i.test(input.lastScammerMessage);
-  if (!stressy || !otpAsk) return false;
-  const stage = emotionalStage(input.turnNumber);
-  const chance = stage === "late" ? 0.35 : 0.25;
-  return Math.random() < chance;
-}
-
 export async function writeReplySmart(
   input: WriterInput,
-  persona: Persona,
-  summary: string,
-  openaiWriter: OpenAIWriter
+  _persona: Persona,
+  _summary: string,
+  _openaiWriter: OpenAIWriter
 ): Promise<string> {
-  const stage = emotionalStage(input.turnNumber);
-  const canResist = stage !== "early" && shouldUseConfusedResistance(input);
-  const selectedInput: WriterInput = canResist ? { ...input, nextIntent: "confused_resistance" } : input;
-  try {
-    const reply = await openaiWriter(selectedInput, persona, summary);
-    if (isValidReply(reply, input.lastReplies)) return reply;
-  } catch (err) {
-    // fallback below
-  }
-  return writeReply(selectedInput);
+  return writeReply(input);
 }

@@ -11,10 +11,6 @@ import { generateReplyOpenAI } from "../core/openaiWriter";
 const router = Router();
 const store = new SessionStore();
 
-function badRequest(res: Response, message: string) {
-  return res.status(400).json({ status: "error", message });
-}
-
 function testerResponse(sessionId?: string, agentNotes: string = "tester_ping_no_message") {
   const now = new Date().toISOString();
   return {
@@ -31,7 +27,7 @@ function testerResponse(sessionId?: string, agentNotes: string = "tester_ping_no
       startedAt: now,
       lastMessageAt: now
     },
-    reply: "OK",
+    reply: "tester ping",
     extractedIntelligence: {
       bankAccounts: [],
       upiIds: [],
@@ -44,17 +40,31 @@ function testerResponse(sessionId?: string, agentNotes: string = "tester_ping_no
   };
 }
 
+router.options("/honeypot", (_req: Request, res: Response) => {
+  return res.status(204).send();
+});
+
+router.get("/honeypot", (req: Request, res: Response) => {
+  const sessionId = (req.query.sessionId as string) || "tester-session";
+  return res.status(200).json(testerResponse(sessionId, "tester_probe_get"));
+});
+
 router.post("/honeypot", async (req: Request, res: Response) => {
   const body: any = req.body ?? {};
+  const apiKey = req.header("x-api-key");
+  const expectedKey = process.env.API_KEY || "";
+  if (expectedKey && (!apiKey || apiKey !== expectedKey)) {
+    return res.status(200).json(testerResponse(body?.sessionId, "invalid_api_key"));
+  }
+
   const text = body?.message?.text;
-  if (!text || typeof text !== "string") {
-    return res.status(200).json(testerResponse(body?.sessionId));
+  if (!text || typeof text !== "string" || text.trim().length === 0) {
+    return res.status(200).json(testerResponse(body?.sessionId, "tester_ping_no_message"));
   }
 
   const bodyTyped = (req.body || {}) as {
     sessionId?: string;
-    message?: { sender?: "scammer" | "user"; text?: string; timestamp?: string } | string;
-    text?: string;
+    message?: { sender?: "scammer" | "user"; text?: string; timestamp?: string };
     conversationHistory?: { sender: string; text: string; timestamp: string }[];
     metadata?: { channel?: string; language?: string; locale?: string };
   };
@@ -66,14 +76,10 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   let messageSender: "scammer" | "user" = "scammer";
   let messageTimestamp = nowIso;
 
-  if (typeof bodyTyped.message === "string") {
-    messageText = bodyTyped.message;
-  } else if (bodyTyped.message) {
+  if (bodyTyped.message) {
     messageText = bodyTyped.message.text || "";
     messageSender = bodyTyped.message.sender || "scammer";
     messageTimestamp = bodyTyped.message.timestamp || nowIso;
-  } else if (bodyTyped.text) {
-    messageText = bodyTyped.text;
   }
 
   if (!messageText) {
@@ -89,9 +95,7 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   } else {
     const lastAt = new Date(session.engagement.lastMessageAt).getTime();
     const tooOld = Date.now() - lastAt > 10 * 60 * 1000;
-    const emptyHistory = (!conversationHistory || conversationHistory.length === 0) &&
-      session.engagement.totalMessagesExchanged > 0;
-    if (session.engagement.mode === "COMPLETE" || tooOld || emptyHistory) {
+    if (session.engagement.mode === "COMPLETE" || tooOld) {
       session = store.resetSession(session, messageTimestamp);
     }
   }
@@ -104,6 +108,13 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   const merged = mergeIntelligence(session.extractedIntelligence, extracted);
 
   const scores = computeScores(normalized, session.state);
+  const scamDetected =
+    scores.scamScore >= 0.6 ||
+    merged.suspiciousKeywords.length >= 2 ||
+    merged.upiIds.length > 0 ||
+    merged.phishingLinks.length > 0 ||
+    normalized.includes("otp") ||
+    normalized.includes("pin");
 
   const gotUpiId = merged.upiIds.length > 0;
   const gotPaymentLink = merged.phishingLinks.length > 0;
@@ -129,6 +140,7 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   const planner = planNext({
     scamScore: scores.scamScore,
     stressScore: scores.stressScore,
+    scamDetected,
     state: session.state,
     engagement: { totalMessagesExchanged: session.engagement.totalMessagesExchanged },
     extracted: merged,
@@ -161,11 +173,16 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   session.engagement.agentMessagesSent += 1;
   session.engagement.totalMessagesExchanged =
     session.engagement.scammerMessagesReceived + session.engagement.agentMessagesSent;
-  session.engagement.mode = planner.mode;
+  const modeBase = scamDetected ? "SCAM_CONFIRMED" : scores.scamScore >= 0.45 ? "SUSPECT" : "SAFE";
+  const finalMode =
+    session.engagement.totalMessagesExchanged >= maxTurns ? "COMPLETE" : modeBase;
+  session.engagement.mode = finalMode;
   session.engagement.lastMessageAt = now;
-  session.agentNotes = planner.agentNotes;
+  session.agentNotes = `mode=${finalMode}, scamScore=${scores.scamScore.toFixed(
+    2
+  )}, stressScore=${scores.stressScore.toFixed(2)}, intent=${planner.nextIntent}`;
   session.lastIntents = [...session.lastIntents, planner.nextIntent].slice(-6);
-  session.lastReplies = [...session.lastReplies, reply].slice(-3);
+  session.lastReplies = [...session.lastReplies, reply].slice(-5);
   console.log("[TURN]", session.sessionId, {
     scammerMessagesReceived: session.engagement.scammerMessagesReceived,
     agentMessagesSent: session.engagement.agentMessagesSent,
@@ -185,7 +202,7 @@ router.post("/honeypot", async (req: Request, res: Response) => {
 
   store.update(session);
 
-  if (planner.mode === "COMPLETE" && planner.scamDetected) {
+  if (session.engagement.mode === "COMPLETE" && scamDetected) {
     await sendFinalCallback(
       session.sessionId,
       session.engagement.totalMessagesExchanged,
@@ -197,7 +214,7 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   return res.json({
     status: "success",
     sessionId: session.sessionId,
-    scamDetected: planner.scamDetected,
+    scamDetected,
     scamScore: scores.scamScore,
     stressScore: scores.stressScore,
     engagement: session.engagement,

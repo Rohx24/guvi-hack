@@ -6,15 +6,18 @@ import honeypotRouter from "./routes/honeypot";
 dotenv.config();
 
 const app = express();
-app.use(cors());
-app.use(express.json({ limit: "1mb" }));
-
-app.use((req: Request, res: Response, next: NextFunction) => {
-  const apiKey = req.header("x-api-key");
-  if (!apiKey || apiKey !== process.env.API_KEY) {
-    return res.status(401).json({ status: "error", message: "Invalid API key" });
-  }
-  return next();
+const corsOptions = {
+  origin: "*",
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["x-api-key", "content-type"]
+};
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
+app.use(express.json({ type: "*/*", limit: "2mb" }));
+app.use(express.urlencoded({ extended: true }));
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  if (!req.body) req.body = {};
+  next();
 });
 
 app.use("/api", honeypotRouter);
@@ -39,7 +42,7 @@ function minSchema(agentNotes: string) {
       startedAt: now,
       lastMessageAt: now
     },
-    reply: "OK",
+    reply: "tester ping",
     extractedIntelligence: {
       bankAccounts: [],
       upiIds: [],
