@@ -20,30 +20,40 @@ export type WriterInput = {
 };
 
 const confusionPool = [
-  "Wait, why OTP here? I'm scared.",
-  "I don't understand. Which account is this?",
-  "Why are you asking PIN on chat?",
-  "This doesn't make sense. Who are you exactly?",
-  "I'm confused. What is this about?"
+  "I'm confused. Which account is this about?",
+  "This is sudden. What exactly happened?",
+  "I'm not sure. Why do you need this now?",
+  "I'm worried. Who should I call to verify this?",
+  "Can you tell me the branch name?"
 ];
 
 const frictionPool = [
-  "OTP not coming. Phone has no network.",
-  "App stuck. It's not opening now.",
-  "It says error. I can't proceed.",
-  "Screen froze. I can't enter anything.",
-  "The page keeps loading. Nothing happens.",
-  "The code field is blank. I can't type.",
-  "It's asking for a PIN. I don't have it."
+  "My app shows an error, give me a minute.",
+  "Network is bad here, I can't open the app.",
+  "The screen is stuck, I'm trying again.",
+  "The app keeps loading, nothing happens.",
+  "I'm in a meeting, can you wait a bit?"
 ];
 
-const delayPool = [
-  "Give me five minutes, I'm outside.",
-  "I'm in a meeting. I'll check shortly.",
-  "Hold on, I'll try again.",
-  "I'm driving. I'll respond soon.",
-  "Let me step aside and try again.",
-  "I need a moment, I'm on another call."
+const verifyPool = [
+  "Can you share your employee ID?",
+  "Please send the official SMS sender ID.",
+  "What's the callback number from your office?",
+  "Can you confirm the branch and your employee ID?",
+  "I will call the bank helpline from the website, okay?"
+];
+
+const refusalPool = [
+  "I won't share OTP/PIN in chat. I can only verify via the official app/helpline.",
+  "I won't share OTP/PIN in chat. Can you share your employee ID?",
+  "I'm calling SBI now, please hold."
+];
+
+const suspicionPool = [
+  "This feels off. Can you share your employee ID?",
+  "I need to verify via the official helpline. Can you wait?",
+  "Please send the official SMS sender ID.",
+  "Can you confirm your branch details?"
 ];
 
 const forbidden = [
@@ -54,19 +64,14 @@ const forbidden = [
   "bot",
   "phishing",
   "police",
-  "cybercrime",
-  "rbi",
-  "complaint"
+  "cybercrime"
 ];
-
-function wordCount(text: string): number {
-  return text.trim().split(/\s+/).filter(Boolean).length;
-}
 
 function isValidReply(reply: string, lastReplies: string[]): boolean {
   if (!reply) return false;
   if (reply.includes("\n")) return false;
-  if (wordCount(reply) > 12) return false;
+  const sentences = reply.split(/[.!?]+/).filter((s) => s.trim().length > 0);
+  if (sentences.length > 2) return false;
   if (/\d{3,}/.test(reply)) return false;
   const lower = reply.toLowerCase();
   if (forbidden.some((word) => lower.includes(word))) return false;
@@ -75,21 +80,28 @@ function isValidReply(reply: string, lastReplies: string[]): boolean {
   return true;
 }
 
-function chooseBucket(message: string): string[] {
+function chooseBucket(message: string, turnNumber: number): string[] {
   const normalized = message.toLowerCase();
   const hasOtpOrPin = /\b(otp|pin)\b/.test(normalized);
-  const hasPressure = /urgent|blocked|immediately/.test(normalized) || hasOtpOrPin;
+  const hasPressure = /urgent|blocked|immediately|suspended|verify/.test(normalized) || hasOtpOrPin;
+  const asksPayment = /upi|transfer|payment/.test(normalized);
 
   if (hasOtpOrPin) {
-    return Math.random() < 0.5 ? confusionPool : frictionPool;
+    return refusalPool;
+  }
+  if (hasPressure && turnNumber > 2) {
+    return Math.random() < 0.6 ? suspicionPool : verifyPool;
+  }
+  if (asksPayment) {
+    return Math.random() < 0.5 ? verifyPool : frictionPool;
   }
   if (hasPressure) {
-    return Math.random() < 0.5 ? confusionPool : delayPool;
+    return Math.random() < 0.5 ? confusionPool : frictionPool;
   }
   const roll = Math.random();
-  if (roll < 0.4) return delayPool;
-  if (roll < 0.7) return frictionPool;
-  return confusionPool;
+  if (roll < 0.3) return confusionPool;
+  if (roll < 0.6) return frictionPool;
+  return verifyPool;
 }
 
 function pickReply(pool: string[], lastReplies: string[]): string {
@@ -97,13 +109,12 @@ function pickReply(pool: string[], lastReplies: string[]): string {
   for (const candidate of shuffled) {
     if (isValidReply(candidate, lastReplies)) return candidate;
   }
-  return "Hold on, I'll try again.";
+  return "I'm calling SBI now, please hold.";
 }
 
 export function writeReply(input: WriterInput): string {
-  const bucket = chooseBucket(input.lastScammerMessage || "");
-  const reply = pickReply(bucket, input.lastReplies || []);
-  return reply;
+  const bucket = chooseBucket(input.lastScammerMessage || "", input.turnNumber || 1);
+  return pickReply(bucket, input.lastReplies || []);
 }
 
 export type OpenAIWriter = (

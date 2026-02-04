@@ -8,22 +8,44 @@ import { sendFinalCallback } from "../core/callback";
 import { summarize } from "../core/summarizer";
 import { generateReplyOpenAI } from "../core/openaiWriter";
 import { makeFullSchema } from "../utils/guviSchema";
-import { logTurn } from "../utils/conversationLogger";
+import { maskDigits, safeLog, safeStringify, sanitizeHeaders } from "../utils/logging";
 
 const router = Router();
 const store = new SessionStore();
 
+function logIncoming(req: Request, body: unknown) {
+  try {
+    const headers = sanitizeHeaders(req.headers);
+    safeLog(`[INCOMING] headers: ${safeStringify(headers, 2000)}`);
+    safeLog(`[INCOMING] body: ${safeStringify(body, 2000)}`);
+  } catch {
+    // swallow logging errors
+  }
+}
+
+function logScammer(text: string) {
+  safeLog(`[SCAMMER] ${maskDigits(text)}`);
+}
+
+function logHoneypot(text: string) {
+  safeLog(`[HONEYPOT] ${maskDigits(text)}`);
+}
+
+function logOutgoing(status: number, responseJson: unknown) {
+  safeLog(`[OUTGOING] response_json: ${safeStringify(responseJson, 5000)}`);
+  safeLog(`[OUTGOING] status: ${status}`);
+}
+
 function testerResponse(sessionId?: string, agentNotes: string = "tester_ping_no_message") {
   return makeFullSchema({
-    status: "success",
-    sessionId: sessionId || "tester-session",
-    reply: "OK",
+    scamDetected: false,
+    totalMessagesExchanged: 0,
     agentNotes
   });
 }
 
 router.options("/honeypot", (_req: Request, res: Response) => {
-  return res.status(200).json(makeFullSchema({ status: "success", agentNotes: "tester_probe" }));
+  return res.status(200).json(makeFullSchema({ agentNotes: "tester_probe" }));
 });
 
 router.get("/honeypot", (req: Request, res: Response) => {
@@ -33,220 +55,232 @@ router.get("/honeypot", (req: Request, res: Response) => {
 
 router.post("/honeypot", async (req: Request, res: Response) => {
   const body: any = req.body ?? {};
+  logIncoming(req, body);
+
+  const text =
+    typeof body?.message?.text === "string"
+      ? body.message.text
+      : typeof body?.text === "string"
+      ? body.text
+      : typeof body?.message === "string"
+      ? body.message
+      : "";
+  let loggedScammer = false;
+  if (text && typeof text === "string" && text.trim().length > 0) {
+    logScammer(text);
+    loggedScammer = true;
+  }
+
   const apiKey = req.header("x-api-key");
   const expectedKey = process.env.API_KEY || "";
   if (expectedKey && (!apiKey || apiKey !== expectedKey)) {
-    try {
-      const pingText = body?.message?.text;
-      if (!pingText || typeof pingText !== "string" || pingText.trim().length === 0) {
-        console.log("[HONEYPOT][PING] Empty body / tester probe");
-      } else {
-        const sessionId = body?.sessionId || "tester-session";
-        logTurn({ sessionId, turn: 1, role: "SCAMMER", text: pingText });
-      }
-    } catch {
-      // swallow logging errors
-    }
-    return res.status(200).json(
-      makeFullSchema({
-        status: "error",
-        sessionId: body?.sessionId || "tester-session",
-        reply: "OK",
-        agentNotes: "Invalid API key"
-      })
-    );
+    const responseJson = makeFullSchema({ agentNotes: "Invalid API key" });
+    logOutgoing(401, responseJson);
+    return res.status(401).json(responseJson);
   }
 
-  const text = body?.message?.text;
   if (!text || typeof text !== "string" || text.trim().length === 0) {
-    try {
-      console.log("[HONEYPOT][PING] Empty body / tester probe");
-    } catch {
-      // swallow logging errors
+    const responseJson = makeFullSchema({ agentNotes: "tester_ping" });
+    logOutgoing(200, responseJson);
+    return res.status(200).json(responseJson);
+  }
+
+  try {
+    const bodyTyped = (req.body || {}) as {
+      sessionId?: string;
+      message?: { sender?: "scammer" | "user"; text?: string; timestamp?: string };
+      conversationHistory?: { sender: string; text: string; timestamp: string }[];
+      metadata?: { channel?: string; language?: string; locale?: string };
+    };
+
+    const nowIso = new Date().toISOString();
+    const sessionId = bodyTyped.sessionId || `tester-${Date.now()}`;
+
+    let messageText = text;
+    let messageSender: "scammer" | "user" = "scammer";
+    let messageTimestamp = nowIso;
+
+    if (bodyTyped.message) {
+      messageText = bodyTyped.message.text || "";
+      messageSender = bodyTyped.message.sender || "scammer";
+      messageTimestamp = bodyTyped.message.timestamp || nowIso;
     }
-    return res
-      .status(200)
-      .json(
-        makeFullSchema({
-          status: "success",
-          sessionId: body?.sessionId || "tester-session",
-          agentNotes: "tester_ping",
-          reply: "OK"
-        })
-      );
-  }
 
-  const bodyTyped = (req.body || {}) as {
-    sessionId?: string;
-    message?: { sender?: "scammer" | "user"; text?: string; timestamp?: string };
-    conversationHistory?: { sender: string; text: string; timestamp: string }[];
-    metadata?: { channel?: string; language?: string; locale?: string };
-  };
-
-  const nowIso = new Date().toISOString();
-  const sessionId = bodyTyped.sessionId || `tester-${Date.now()}`;
-
-  let messageText = "";
-  let messageSender: "scammer" | "user" = "scammer";
-  let messageTimestamp = nowIso;
-
-  if (bodyTyped.message) {
-    messageText = bodyTyped.message.text || "";
-    messageSender = bodyTyped.message.sender || "scammer";
-    messageTimestamp = bodyTyped.message.timestamp || nowIso;
-  }
-
-  if (!messageText) {
-    return res.status(200).json(testerResponse(sessionId, "tester_ping_no_message"));
-  }
-
-  const conversationHistory = bodyTyped.conversationHistory || [];
-  const metadata = bodyTyped.metadata || { channel: "SMS", language: "English", locale: "IN" };
-
-  let session = store.get(sessionId);
-  if (!session) {
-    session = store.getOrCreate(sessionId, messageTimestamp);
-  } else {
-    const lastAt = new Date(session.engagement.lastMessageAt).getTime();
-    const tooOld = Date.now() - lastAt > 10 * 60 * 1000;
-    if (session.engagement.mode === "COMPLETE" || tooOld) {
-      session = store.resetSession(session, messageTimestamp);
+    if (!messageText) {
+      const responseJson = testerResponse(sessionId, "tester_ping_no_message");
+      logOutgoing(200, responseJson);
+      return res.status(200).json(responseJson);
     }
-  }
 
-  const historyTexts = conversationHistory.map((m) => m.text);
-  const texts = [messageText, ...historyTexts];
+    const conversationHistory = bodyTyped.conversationHistory || [];
 
-  const turnNumber = Math.max(1, Math.floor(session.engagement.totalMessagesExchanged / 2) + 1);
-  logTurn({ sessionId: session.sessionId, turn: turnNumber, role: "SCAMMER", text: messageText });
+    let session = store.get(sessionId);
+    if (!session) {
+      session = store.getOrCreate(sessionId, messageTimestamp);
+    } else {
+      const lastAt = new Date(session.engagement.lastMessageAt).getTime();
+      const tooOld = Date.now() - lastAt > 10 * 60 * 1000;
+      const emptyHistory =
+        (!conversationHistory || conversationHistory.length === 0) &&
+        session.engagement.totalMessagesExchanged > 0;
+      if (session.engagement.mode === "COMPLETE" || tooOld || emptyHistory) {
+        session = store.resetSession(session, messageTimestamp);
+      }
+    }
 
-  const normalized = normalizeText(messageText);
-  const extracted = extractIntelligence(texts);
-  const merged = mergeIntelligence(session.extractedIntelligence, extracted);
+    const historyTexts = conversationHistory.map((m) => m.text);
+    const texts = [messageText, ...historyTexts];
 
-  const scores = computeScores(normalized, session.state);
-  const scamDetected =
-    scores.scamScore >= 0.6 ||
-    merged.suspiciousKeywords.length >= 2 ||
-    merged.upiIds.length > 0 ||
-    merged.phishingLinks.length > 0 ||
-    normalized.includes("otp") ||
-    normalized.includes("pin");
+    if (!loggedScammer) {
+      logScammer(messageText);
+      loggedScammer = true;
+    }
 
-  const gotUpiId = merged.upiIds.length > 0;
-  const gotPaymentLink = merged.phishingLinks.length > 0;
-  const gotPhoneOrEmail = merged.phoneNumbers.length > 0 || merged.emails.length > 0;
-  const gotBankAccountLikeDigits = merged.bankAccounts.length > 0;
-  const gotPhishingUrl = merged.phishingLinks.length > 0;
-  const gotExplicitOtpAsk =
-    session.goalFlags.gotExplicitOtpAsk ||
-    normalized.includes("otp") ||
-    normalized.includes("one time password") ||
-    merged.suspiciousKeywords.includes("otp");
+    const normalized = normalizeText(messageText);
+    const extracted = extractIntelligence(texts);
+    const merged = mergeIntelligence(session.extractedIntelligence, extracted);
 
-  session.goalFlags = {
-    gotUpiId: session.goalFlags.gotUpiId || gotUpiId,
-    gotPaymentLink: session.goalFlags.gotPaymentLink || gotPaymentLink,
-    gotPhoneOrEmail: session.goalFlags.gotPhoneOrEmail || gotPhoneOrEmail,
-    gotBankAccountLikeDigits: session.goalFlags.gotBankAccountLikeDigits || gotBankAccountLikeDigits,
-    gotPhishingUrl: session.goalFlags.gotPhishingUrl || gotPhishingUrl,
-    gotExplicitOtpAsk
-  };
+    const scores = computeScores(normalized, session.state);
+    const scamDetected =
+      scores.scamScore >= 0.6 ||
+      merged.suspiciousKeywords.length >= 2 ||
+      merged.upiIds.length > 0 ||
+      merged.phishingLinks.length > 0 ||
+      normalized.includes("otp") ||
+      normalized.includes("pin");
 
-  const maxTurns = Number(process.env.MAX_TURNS || 14);
-  const planner = planNext({
-    scamScore: scores.scamScore,
-    stressScore: scores.stressScore,
-    scamDetected,
-    state: session.state,
-    engagement: { totalMessagesExchanged: session.engagement.totalMessagesExchanged },
-    extracted: merged,
-    story: session.story,
-    maxTurns,
-    goalFlags: session.goalFlags,
-    lastIntents: session.lastIntents
-  });
+    const gotUpiId = merged.upiIds.length > 0;
+    const gotPaymentLink = merged.phishingLinks.length > 0;
+    const gotPhoneOrEmail = merged.phoneNumbers.length > 0 || merged.emails.length > 0;
+    const gotBankAccountLikeDigits = merged.bankAccounts.length > 0;
+    const gotPhishingUrl = merged.phishingLinks.length > 0;
+    const gotExplicitOtpAsk =
+      session.goalFlags.gotExplicitOtpAsk ||
+      normalized.includes("otp") ||
+      normalized.includes("one time password") ||
+      merged.suspiciousKeywords.includes("otp");
 
-  const summary = summarize(conversationHistory, merged, session.story, session.persona);
-  const reply = await writeReplySmart(
-    {
-      nextIntent: planner.nextIntent,
-      state: planner.updatedState,
+    session.goalFlags = {
+      gotUpiId: session.goalFlags.gotUpiId || gotUpiId,
+      gotPaymentLink: session.goalFlags.gotPaymentLink || gotPaymentLink,
+      gotPhoneOrEmail: session.goalFlags.gotPhoneOrEmail || gotPhoneOrEmail,
+      gotBankAccountLikeDigits: session.goalFlags.gotBankAccountLikeDigits || gotBankAccountLikeDigits,
+      gotPhishingUrl: session.goalFlags.gotPhishingUrl || gotPhishingUrl,
+      gotExplicitOtpAsk
+    };
+
+    const maxTurns = Number(process.env.MAX_TURNS || 14);
+    const planner = planNext({
+      scamScore: scores.scamScore,
       stressScore: scores.stressScore,
-      lastScammerMessage: messageText,
+      scamDetected,
+      state: session.state,
+      engagement: { totalMessagesExchanged: session.engagement.totalMessagesExchanged },
+      extracted: merged,
       story: session.story,
-      lastReplies: session.lastReplies,
-      turnNumber: session.engagement.totalMessagesExchanged + 1
-    },
-    session.persona,
-    summary,
-    generateReplyOpenAI
-  );
-  logTurn({ sessionId: session.sessionId, turn: turnNumber, role: "HONEYPOT", text: reply });
+      maxTurns,
+      goalFlags: session.goalFlags,
+      lastIntents: session.lastIntents
+    });
 
-  const now = new Date().toISOString();
-  session.state = planner.updatedState;
-  session.extractedIntelligence = merged;
-  if (messageSender === "scammer") session.engagement.scammerMessagesReceived += 1;
-  session.engagement.agentMessagesSent += 1;
-  session.engagement.totalMessagesExchanged =
-    session.engagement.scammerMessagesReceived + session.engagement.agentMessagesSent;
-  const modeBase = scamDetected ? "SCAM_CONFIRMED" : scores.scamScore >= 0.45 ? "SUSPECT" : "SAFE";
-  const finalMode =
-    session.engagement.totalMessagesExchanged >= maxTurns ? "COMPLETE" : modeBase;
-  session.engagement.mode = finalMode;
-  session.engagement.lastMessageAt = now;
-  session.agentNotes = `mode=${finalMode}, scamScore=${scores.scamScore.toFixed(
-    2
-  )}, stressScore=${scores.stressScore.toFixed(2)}, intent=${planner.nextIntent}`;
-  session.lastIntents = [...session.lastIntents, planner.nextIntent].slice(-6);
-  session.lastReplies = [...session.lastReplies, reply].slice(-5);
-  console.log("[TURN]", session.sessionId, {
-    scammerMessagesReceived: session.engagement.scammerMessagesReceived,
-    agentMessagesSent: session.engagement.agentMessagesSent,
-    totalMessagesExchanged: session.engagement.totalMessagesExchanged,
-    mode: session.engagement.mode
-  });
-
-  if (!session.story.scammerClaim && scores.signals.authority > 0) {
-    session.story.scammerClaim = "authority claim";
-  }
-  if (!session.story.scammerAsk && scores.signals.credential > 0) {
-    session.story.scammerAsk = "credential request";
-  }
-  if (!session.story.scamType && scores.scamScore > 0.6) {
-    session.story.scamType = "financial/impersonation";
-  }
-
-  store.update(session);
-
-  if (session.engagement.mode === "COMPLETE" && scamDetected) {
-    await sendFinalCallback(
-      session.sessionId,
-      session.engagement.totalMessagesExchanged,
-      session.extractedIntelligence,
-      session.agentNotes
+    const summary = summarize(conversationHistory, merged, session.story, session.persona);
+    const reply = await writeReplySmart(
+      {
+        nextIntent: planner.nextIntent,
+        state: planner.updatedState,
+        stressScore: scores.stressScore,
+        lastScammerMessage: messageText,
+        story: session.story,
+        lastReplies: session.lastReplies,
+        turnNumber: session.engagement.totalMessagesExchanged + 1
+      },
+      session.persona,
+      summary,
+      generateReplyOpenAI
     );
-  }
+    logHoneypot(reply);
 
-  return res.json({
-    status: "success",
-    sessionId: session.sessionId,
-    scamDetected,
-    scamScore: scores.scamScore,
-    stressScore: scores.stressScore,
-    engagement: session.engagement,
-    reply,
-    extractedIntelligence: {
-      bankAccounts: merged.bankAccounts,
-      upiIds: merged.upiIds,
-      phishingLinks: merged.phishingLinks,
-      phoneNumbers: merged.phoneNumbers,
-      emails: merged.emails,
-      suspiciousKeywords: merged.suspiciousKeywords
-    },
-    agentNotes: session.agentNotes
-  });
+    const now = new Date().toISOString();
+    session.state = planner.updatedState;
+    session.extractedIntelligence = merged;
+    if (messageSender === "scammer") session.engagement.scammerMessagesReceived += 1;
+    session.engagement.agentMessagesSent += 1;
+    session.engagement.totalMessagesExchanged =
+      session.engagement.scammerMessagesReceived + session.engagement.agentMessagesSent;
+    const modeBase = scamDetected ? "SCAM_CONFIRMED" : scores.scamScore >= 0.45 ? "SUSPECT" : "SAFE";
+    const finalMode =
+      session.engagement.totalMessagesExchanged >= maxTurns ? "COMPLETE" : modeBase;
+    session.engagement.mode = finalMode;
+    session.engagement.lastMessageAt = now;
+    session.agentNotes = `mode=${finalMode}, scamScore=${scores.scamScore.toFixed(
+      2
+    )}, stressScore=${scores.stressScore.toFixed(2)}, intent=${planner.nextIntent}`;
+    session.lastIntents = [...session.lastIntents, planner.nextIntent].slice(-6);
+    session.lastReplies = [...session.lastReplies, reply].slice(-5);
+    safeLog(
+      `[TURN] ${safeStringify(
+        {
+          sessionId: session.sessionId,
+          scammerMessagesReceived: session.engagement.scammerMessagesReceived,
+          agentMessagesSent: session.engagement.agentMessagesSent,
+          totalMessagesExchanged: session.engagement.totalMessagesExchanged,
+          mode: session.engagement.mode
+        },
+        2000
+      )}`
+    );
+
+    if (!session.story.scammerClaim && scores.signals.authority > 0) {
+      session.story.scammerClaim = "authority claim";
+    }
+    if (!session.story.scammerAsk && scores.signals.credential > 0) {
+      session.story.scammerAsk = "credential request";
+    }
+    if (!session.story.scamType && scores.scamScore > 0.6) {
+      session.story.scamType = "financial/impersonation";
+    }
+
+    store.update(session);
+
+    if (session.engagement.mode === "COMPLETE" && scamDetected) {
+      await sendFinalCallback(
+        session.sessionId,
+        session.engagement.totalMessagesExchanged,
+        session.extractedIntelligence,
+        session.agentNotes
+      );
+    }
+
+    const responseJson = makeFullSchema({
+      scamDetected,
+      totalMessagesExchanged: session.engagement.totalMessagesExchanged,
+      extractedIntelligence: {
+        bankAccounts: merged.bankAccounts,
+        upiIds: merged.upiIds,
+        phishingLinks: merged.phishingLinks,
+        phoneNumbers: merged.phoneNumbers,
+        suspiciousKeywords: merged.suspiciousKeywords
+      },
+      agentNotes: session.agentNotes
+    });
+    logOutgoing(200, responseJson);
+    return res.status(200).json(responseJson);
+  } catch (err) {
+    const normalized = String(text || "").toLowerCase();
+    const fallbackScamDetected =
+      /otp|pin/.test(normalized) || /urgent|immediately|blocked|suspended/.test(normalized);
+    const historyLen = Array.isArray(body?.conversationHistory)
+      ? body.conversationHistory.length
+      : 0;
+    const totalMessagesExchanged = text ? historyLen + 1 : historyLen;
+    const responseJson = makeFullSchema({
+      scamDetected: fallbackScamDetected,
+      totalMessagesExchanged,
+      agentNotes: "fallback due to internal error"
+    });
+    logOutgoing(200, responseJson);
+    return res.status(200).json(responseJson);
+  }
 });
 
 export default router;
