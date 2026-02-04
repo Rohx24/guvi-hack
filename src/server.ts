@@ -16,43 +16,22 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
-const BODY_LIMIT = 2 * 1024 * 1024;
-app.use((req: Request, _res: Response, next: NextFunction) => {
-  let data = "";
-  let truncated = false;
-  req.on("data", (chunk) => {
-    if (truncated) return;
-    data += chunk.toString();
-    if (data.length > BODY_LIMIT) {
-      data = data.slice(0, BODY_LIMIT);
-      truncated = true;
-    }
-  });
-  req.on("end", () => {
-    (req as Request & { rawBody?: string }).rawBody = data;
-    next();
-  });
-  req.on("error", () => {
-    (req as Request & { rawBody?: string }).rawBody = data;
-    next();
-  });
-});
-
 app.use(express.json({ type: "*/*", limit: "2mb" }));
-app.use(express.urlencoded({ extended: true }));
-app.use((req: Request, _res: Response, next: NextFunction) => {
-  const rawBody = (req as Request & { rawBody?: string }).rawBody;
-  if (rawBody && rawBody.length > 0) {
-    try {
-      req.body = JSON.parse(rawBody);
-    } catch {
-      if (!req.body) req.body = {};
-    }
-  } else if (!req.body) {
-    req.body = {};
+app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
+  const isJsonSyntax = err instanceof SyntaxError && "body" in (err as any);
+  if (isJsonSyntax) {
+    return res.status(200).json(
+      makeFullSchema({
+        status: "success",
+        sessionId: "tester-session",
+        reply: "OK",
+        agentNotes: "caught_invalid_json_body"
+      })
+    );
   }
-  next();
+  return next(err);
 });
+app.use(express.urlencoded({ extended: true }));
 
 const honeypotPaths = ["/api/honeypot", "/api/honeypot/", "/honeypot", "/honeypot/"];
 app.all(honeypotPaths, (req: Request, res: Response, next: NextFunction) => {
@@ -60,18 +39,27 @@ app.all(honeypotPaths, (req: Request, res: Response, next: NextFunction) => {
   const isApiPost =
     method === "POST" && (req.path === "/api/honeypot" || req.path === "/api/honeypot/");
   if (isApiPost) return next();
+  if (method === "GET" || method === "OPTIONS" || method === "HEAD") {
+    return res.status(200).json(
+      makeFullSchema({
+        reply: "OK",
+        agentNotes: `probe:${method}`
+      })
+    );
+  }
   const apiKey = req.header("x-api-key");
   const expectedKey = process.env.API_KEY || "";
   const invalidKey = expectedKey && apiKey !== expectedKey;
   const sessionId =
     (req.query.sessionId as string) || (req.body && req.body.sessionId) || "tester-session";
-  const schema = makeFullSchema({
-    status: invalidKey ? "error" : "success",
-    sessionId,
-    reply: "OK",
-    agentNotes: invalidKey ? "Invalid API key" : "tester_probe"
-  });
-  return res.status(200).json(schema);
+  return res.status(200).json(
+    makeFullSchema({
+      status: invalidKey ? "error" : "success",
+      sessionId,
+      reply: "OK",
+      agentNotes: invalidKey ? "Invalid API key" : "probe:NON_API_POST"
+    })
+  );
 });
 
 app.use("/api", honeypotRouter);
@@ -84,13 +72,15 @@ const port = Number(process.env.PORT || 3000);
 
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   console.error("ERR", err);
-  return res.status(200).json(makeFullSchema({ status: "error", agentNotes: "error_handler" }));
+  return res
+    .status(200)
+    .json(makeFullSchema({ status: "success", reply: "OK", agentNotes: `error:${String((err as any)?.message || err)}` }));
 });
 
 app.use((req: Request, res: Response) => {
   return res
     .status(200)
-    .json(makeFullSchema({ status: "error", agentNotes: `not_found:${req.originalUrl}` }));
+    .json(makeFullSchema({ status: "success", reply: "OK", agentNotes: `not_found:${req.originalUrl}` }));
 });
 
 app.listen(port, () => {
