@@ -120,13 +120,12 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   };
 
   const maxTurns = Number(process.env.MAX_TURNS || 14);
-  const projectedTotal = session.engagement.totalMessagesExchanged + 1;
   const planner = planNext({
     scamScore: scores.scamScore,
     stressScore: scores.stressScore,
     signals: scores.signals,
     state: session.state,
-    engagement: { totalMessagesExchanged: projectedTotal },
+    engagement: { totalMessagesExchanged: session.engagement.totalMessagesExchanged },
     extracted: merged,
     story: session.story,
     maxTurns,
@@ -148,7 +147,7 @@ router.post("/honeypot", async (req: Request, res: Response) => {
       lastScammerMessage: messageText,
       story: session.story,
       lastReplies: session.lastReplies,
-      turnNumber: projectedTotal,
+      turnNumber: session.engagement.totalMessagesExchanged + 1,
       phase: planner.nextPhase,
       lastFriction: planner.nextFriction
     },
@@ -160,9 +159,10 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   const now = new Date().toISOString();
   session.state = planner.updatedState;
   session.extractedIntelligence = merged;
-  session.engagement.totalMessagesExchanged = projectedTotal;
   if (messageSender === "scammer") session.engagement.scammerMessagesReceived += 1;
-  if (messageSender === "scammer") session.engagement.agentMessagesSent += 1;
+  session.engagement.agentMessagesSent += 1;
+  session.engagement.totalMessagesExchanged =
+    session.engagement.scammerMessagesReceived + session.engagement.agentMessagesSent;
   session.engagement.mode = planner.mode;
   session.engagement.lastMessageAt = now;
   session.agentNotes = planner.agentNotes;
@@ -172,6 +172,12 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   session.lastFriction = planner.nextFriction;
   session.lastIntents = [...session.lastIntents, planner.nextIntent].slice(-5);
   session.lastReplies = [...session.lastReplies, reply].slice(-3);
+  console.log("[TURN]", session.sessionId, {
+    scammerMessagesReceived: session.engagement.scammerMessagesReceived,
+    agentMessagesSent: session.engagement.agentMessagesSent,
+    totalMessagesExchanged: session.engagement.totalMessagesExchanged,
+    mode: session.engagement.mode
+  });
 
   if (!session.story.scammerClaim && scores.signals.authority > 0) {
     session.story.scammerClaim = "authority claim";

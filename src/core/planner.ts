@@ -217,13 +217,15 @@ export function planNext(input: PlannerInput): PlannerOutput {
     nextIntent = stressScore > 0.7 ? "seek_reassurance" : "pretend_technical_issue";
   }
 
+  const actionable =
+    goalFlags.gotUpiId ||
+    goalFlags.gotPaymentLink ||
+    goalFlags.gotBankAccountLikeDigits ||
+    goalFlags.gotPhoneOrEmail;
+
   if (
     engagement.totalMessagesExchanged >= maxTurns ||
-    ((goalFlags.gotUpiId ||
-      goalFlags.gotPaymentLink ||
-      goalFlags.gotBankAccountLikeDigits ||
-      goalFlags.gotPhoneOrEmail) &&
-      engagement.totalMessagesExchanged >= 8)
+    (scamDetected && actionable && engagement.totalMessagesExchanged >= 8)
   ) {
     mode = "COMPLETE";
     nextPhase = "EXIT";
