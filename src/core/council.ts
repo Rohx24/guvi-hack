@@ -34,7 +34,7 @@ const FALLBACK_REPLIES_LOW = [
 
 const FALLBACK_REPLIES_HIGH = [
   "Wait, why OTP here? I'm getting scared.",
-  "I won't share OTP/PIN in chat. I'll call SBI now.",
+  "This feels risky. I'll call SBI now.",
   "This feels off. Please share your employee ID."
 ];
 

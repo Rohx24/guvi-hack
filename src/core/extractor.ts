@@ -7,6 +7,7 @@ export type ExtractedIntelligence = {
   phoneNumbers: string[];
   emails: string[];
   suspiciousKeywords: string[];
+  employeeIds: string[];
 };
 
 const suspiciousKeywordList = [
@@ -49,7 +50,8 @@ const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[A-Za-z]{2,}/g;
 const urlRegex = /https?:\/\/[^\s/$.?#].[^\s]*/gi;
 const paymentLinkRegex = /(?:upi:\/\/pay|payto:)[^\s]+/gi;
 const upiRegex = /[a-zA-Z0-9._-]{2,}@(upi|ybl|okhdfcbank|oksbi|okicici|okaxis|okpaytm|paytm|ibl|axl|sbi|hdfcbank|icici|kotak|baroda|upiicici)/gi;
-const longDigitRegex = /\b\d{10,}\b/g;
+const bankAccountRegex = /\b\d{11,18}\b/g;
+const employeeIdRegex = /\b(?:employee|emp|staff)\s*(?:id|code|no|number)?\s*[:#-]?\s*([a-z0-9-]{3,12})\b/gi;
 
 export function normalizeText(text: string): string {
   return text
@@ -68,26 +70,41 @@ function uniqueMerge(base: string[], next: string[]): string[] {
   return Array.from(set);
 }
 
+function normalizeUrl(url: string): string {
+  return url.replace(/[),\].}]+$/g, "").trim();
+}
+
+function uniqueNormalizedUrls(items: string[]): string[] {
+  const set = new Set<string>();
+  for (const raw of items) {
+    const normalized = normalizeUrl(raw);
+    if (normalized) set.add(normalized);
+  }
+  return Array.from(set);
+}
+
 export function extractIntelligence(texts: string[]): ExtractedIntelligence {
   const combined = texts.join(" \n ");
   const normalized = normalizeText(combined);
 
-  const phones = normalized.match(phoneRegex) || [];
-  const emails = normalized.match(emailRegex) || [];
-  const urls = combined.match(urlRegex) || [];
-  const payLinks = combined.match(paymentLinkRegex) || [];
-  const upiIds = normalized.match(upiRegex) || [];
-  const longDigits = normalized.match(longDigitRegex) || [];
+  const phones: string[] = normalized.match(phoneRegex) || [];
+  const emails: string[] = normalized.match(emailRegex) || [];
+  const urls: string[] = combined.match(urlRegex) || [];
+  const payLinks: string[] = combined.match(paymentLinkRegex) || [];
+  const upiIds: string[] = normalized.match(upiRegex) || [];
+  const bankDigits: string[] = normalized.match(bankAccountRegex) || [];
+  const employeeIds = Array.from(normalized.matchAll(employeeIdRegex)).map((m) => m[1]);
 
   const suspicious = suspiciousKeywordList.filter((kw) => normalized.includes(kw));
 
   return {
-    bankAccounts: uniqueMerge([], longDigits),
+    bankAccounts: uniqueMerge([], bankDigits.filter((d) => !phones.includes(d))),
     upiIds: uniqueMerge([], upiIds),
-    phishingLinks: uniqueMerge([], [...urls, ...payLinks]),
+    phishingLinks: uniqueMerge([], uniqueNormalizedUrls([...urls, ...payLinks])),
     phoneNumbers: uniqueMerge([], phones),
     emails: uniqueMerge([], emails),
-    suspiciousKeywords: uniqueMerge([], suspicious)
+    suspiciousKeywords: uniqueMerge([], suspicious),
+    employeeIds: uniqueMerge([], employeeIds)
   };
 }
 
@@ -101,7 +118,8 @@ export function mergeIntelligence(
     phishingLinks: uniqueMerge(existing.phishingLinks, incoming.phishingLinks),
     phoneNumbers: uniqueMerge(existing.phoneNumbers, incoming.phoneNumbers),
     emails: uniqueMerge(existing.emails, incoming.emails),
-    suspiciousKeywords: uniqueMerge(existing.suspiciousKeywords, incoming.suspiciousKeywords)
+    suspiciousKeywords: uniqueMerge(existing.suspiciousKeywords, incoming.suspiciousKeywords),
+    employeeIds: uniqueMerge(existing.employeeIds, incoming.employeeIds)
   };
 }
 

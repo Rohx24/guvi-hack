@@ -48,7 +48,8 @@ const DEFAULT_EXTRACTED: ExtractedIntelligence = {
   phishingLinks: [],
   phoneNumbers: [],
   emails: [],
-  suspiciousKeywords: []
+  suspiciousKeywords: [],
+  employeeIds: []
 };
 
 const DEFAULT_GOALS: GoalFlags = {
@@ -98,6 +99,10 @@ export class SessionStore {
       if (!existing.lastReplies) existing.lastReplies = [];
       if (typeof existing.scamDetected !== "boolean") existing.scamDetected = false;
       if (typeof existing.callbackSent !== "boolean") existing.callbackSent = false;
+      if (!existing.extractedIntelligence) existing.extractedIntelligence = { ...DEFAULT_EXTRACTED };
+      if (!existing.extractedIntelligence.employeeIds) {
+        existing.extractedIntelligence.employeeIds = [];
+      }
       this.update(existing);
       return existing;
     }

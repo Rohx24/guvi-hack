@@ -173,12 +173,15 @@ router.post("/honeypot", async (req: Request, res: Response) => {
       gotExplicitOtpAsk
     };
 
-    const maxTurns = Number(process.env.MAX_TURNS || 14);
+    const maxTurns = Number(process.env.MAX_TURNS || 12);
+    const linkPressure =
+      merged.phishingLinks.length > 0 || /link|click|upi|payment/.test(normalized);
     const planner = planNext({
       scamScore: scores.scamScore,
       stressScore: scores.stressScore,
       scamDetected,
       state: session.state,
+      linkPressure,
       engagement: { totalMessagesExchanged: session.engagement.totalMessagesExchanged },
       extracted: merged,
       story: session.story,
@@ -219,7 +222,8 @@ router.post("/honeypot", async (req: Request, res: Response) => {
           lastScammerMessage: messageText,
           story: session.story,
           lastReplies: session.lastReplies,
-          turnNumber: session.engagement.totalMessagesExchanged + 1
+          turnNumber: session.engagement.totalMessagesExchanged + 1,
+          extracted: merged
         },
         session.persona,
         summary,
@@ -274,7 +278,11 @@ router.post("/honeypot", async (req: Request, res: Response) => {
 
     store.update(session);
 
-    if (session.engagement.mode === "COMPLETE" && scamDetected && !session.callbackSent) {
+    if (
+      scamDetected &&
+      session.engagement.totalMessagesExchanged >= maxTurns &&
+      !session.callbackSent
+    ) {
       session.callbackSent = true;
       store.update(session);
       void sendFinalCallback(

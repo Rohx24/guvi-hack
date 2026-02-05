@@ -40,6 +40,7 @@ export type PlannerInput = {
   stressScore: number;
   scamDetected: boolean;
   state: SessionState;
+  linkPressure: boolean;
   engagement: {
     totalMessagesExchanged: number;
   };
@@ -64,6 +65,13 @@ function intentRepeated(intent: Intent, lastIntents: Intent[]): boolean {
   return count >= 2;
 }
 
+function lastTwoSame(lastIntents: Intent[]): boolean {
+  if (lastIntents.length < 2) return false;
+  const a = lastIntents[lastIntents.length - 1];
+  const b = lastIntents[lastIntents.length - 2];
+  return a === b;
+}
+
 function pickAlternateIntent(
   preferred: Intent[],
   lastIntents: Intent[],
@@ -83,8 +91,18 @@ function pickAlternateIntent(
 }
 
 export function planNext(input: PlannerInput): PlannerOutput {
-  const { scamScore, stressScore, scamDetected, state, engagement, story, goalFlags, lastIntents } =
-    input;
+  const {
+    scamScore,
+    stressScore,
+    scamDetected,
+    state,
+    engagement,
+    story,
+    goalFlags,
+    lastIntents,
+    extracted,
+    linkPressure
+  } = input;
   let mode: SessionMode = scamDetected ? "SCAM_CONFIRMED" : "SAFE";
   if (!scamDetected && scamScore >= 0.45) mode = "SUSPECT";
 
@@ -132,7 +150,11 @@ export function planNext(input: PlannerInput): PlannerOutput {
     nextIntent = "ask_for_official_id_softly";
   }
 
-  if (intentRepeated(nextIntent, lastIntents)) {
+  if (scamDetected && linkPressure) {
+    nextIntent = "ask_for_official_id_softly";
+  }
+
+  if (lastTwoSame(lastIntents) || intentRepeated(nextIntent, lastIntents)) {
     const preferredFallbacks: Intent[] = [
       "pretend_technical_issue",
       "seek_reassurance",

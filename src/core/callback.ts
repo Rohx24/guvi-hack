@@ -58,17 +58,17 @@ export async function sendFinalCallback(
     try {
       const response = await postWithTimeout(CALLBACK_URL, payload, 5000);
       if (response.ok) {
-        console.info("[CALLBACK] success", { sessionId, status: response.status, attempt });
+        console.info(`[CALLBACK] sent sessionId=${sessionId}`);
         return { ok: true, status: response.status };
       }
       lastError = new Error(`Callback failed with status ${response.status}`);
-      console.warn("[CALLBACK] failed", { sessionId, status: response.status, attempt });
+      console.warn(`[CALLBACK] failed sessionId=${sessionId} err=status_${response.status}`);
     } catch (err) {
       lastError = err;
-      console.warn("[CALLBACK] error", { sessionId, attempt, error: String(err) });
+      console.warn(`[CALLBACK] failed sessionId=${sessionId} err=${String(err)}`);
     }
   }
 
-  console.error("[CALLBACK] giving_up", { sessionId, error: String(lastError) });
+  console.error(`[CALLBACK] failed sessionId=${sessionId} err=${String(lastError)}`);
   return { ok: false, status: lastError instanceof Error ? undefined : undefined };
 }

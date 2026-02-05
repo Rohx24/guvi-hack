@@ -1,5 +1,6 @@
 import { SessionState, StorySummary } from "./planner";
 import type { Persona } from "./persona";
+import type { ExtractedIntelligence } from "./extractor";
 
 export type WriterInput = {
   nextIntent:
@@ -17,43 +18,35 @@ export type WriterInput = {
   story: StorySummary;
   lastReplies: string[];
   turnNumber: number;
+  extracted?: ExtractedIntelligence;
 };
 
-const confusionPool = [
-  "I'm confused. Which account is this about?",
-  "This is sudden. What exactly happened?",
-  "I'm not sure. Why do you need this now?",
-  "I'm worried. Who should I call to verify this?",
-  "Can you tell me the branch name?"
+const humanResistancePool = [
+  "I'm scared to do this. Do you have a ticket number?",
+  "This feels risky. What's your designation?",
+  "I'm not comfortable sharing that. Which branch is this?",
+  "Why do you need this now? Do you have a reference number?",
+  "I'm worried. Can you share an official callback number?"
+];
+
+const softCompliancePool = [
+  "OTP not coming, I'm trying again. Do you have a case ID?",
+  "The page is loading only. What's your designation?",
+  "App is stuck here. Which branch is this from?",
+  "It's asking PIN and I forgot. Can you share a reference number?"
 ];
 
 const frictionPool = [
-  "My app shows an error, give me a minute.",
-  "Network is bad here, I can't open the app.",
-  "The screen is stuck, I'm trying again.",
-  "The app keeps loading, nothing happens.",
-  "I'm in a meeting, can you wait a bit?"
+  "Network is bad here, I'm trying again.",
+  "The app is slow, give me a minute.",
+  "I'm in a meeting, can you wait a bit?",
+  "I'm outside now, I'll check and reply."
 ];
 
-const verifyPool = [
-  "Can you share your employee ID?",
-  "Please send the official SMS sender ID.",
-  "What's the callback number from your office?",
-  "Can you confirm the branch and your employee ID?",
-  "I will call the bank helpline from the website, okay?"
-];
-
-const refusalPool = [
-  "I won't share OTP/PIN in chat. I can only verify via the official app/helpline.",
-  "I won't share OTP/PIN in chat. Can you share your employee ID?",
-  "I'm calling SBI now, please hold."
-];
-
-const suspicionPool = [
-  "This feels off. Can you share your employee ID?",
-  "I need to verify via the official helpline. Can you wait?",
-  "Please send the official SMS sender ID.",
-  "Can you confirm your branch details?"
+const confusionPool = [
+  "I'm not sure what's happening. Which account is this?",
+  "This is sudden. What exactly happened?",
+  "I don't understand. What is this about?"
 ];
 
 const forbidden = [
@@ -64,57 +57,150 @@ const forbidden = [
   "bot",
   "phishing",
   "police",
-  "cybercrime"
+  "cybercrime",
+  "rbi",
+  "complaint filed"
 ];
 
-function isValidReply(reply: string, lastReplies: string[]): boolean {
+function normalize(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isRepeat(reply: string, lastReplies: string[]): boolean {
+  const recent = lastReplies.slice(-3);
+  const norm = normalize(reply);
+  for (const prev of recent) {
+    if (normalize(prev) === norm) return true;
+  }
+  return false;
+}
+
+function hasLinkOrUpiOrPhone(text: string): boolean {
+  if (/https?:\/\/\S+/i.test(text)) return true;
+  if (/[a-z0-9._-]{2,}@(upi|ybl|okhdfcbank|oksbi|okicici|okaxis|okpaytm|paytm|ibl|axl|sbi|hdfcbank|icici|kotak|baroda|upiicici)/i.test(text))
+    return true;
+  if (/\b\d{10,}\b/.test(text)) return true;
+  return false;
+}
+
+function pickAskQuestion(input: WriterInput): string {
+  const lastReplies = input.lastReplies || [];
+  const extracted = input.extracted;
+  const asked = (keywords: string[]) =>
+    lastReplies.some((r) => keywords.some((k) => normalize(r).includes(k)));
+
+  const steps: Array<{ key: string; keywords: string[]; question: string; skip?: boolean }> = [
+    {
+      key: "ticket",
+      keywords: ["ticket", "reference", "case id", "case"],
+      question: "Do you have any ticket or reference number?"
+    },
+    {
+      key: "designation",
+      keywords: ["designation", "role", "post", "employee id", "staff id"],
+      question:
+        extracted && extracted.employeeIds && extracted.employeeIds.length > 0
+          ? "What's your designation?"
+          : "What's your employee ID?"
+    },
+    {
+      key: "branch",
+      keywords: ["branch"],
+      question: "Which branch is this from?"
+    },
+    {
+      key: "callback",
+      keywords: ["toll free", "callback", "helpline", "official number"],
+      question: "Share an official callback or toll-free number."
+    },
+    {
+      key: "transaction",
+      keywords: ["transaction", "charge", "amount"],
+      question: "Which transaction is this about?"
+    },
+    {
+      key: "link",
+      keywords: ["link", "sms", "url"],
+      question: "Why are you sending a link for this?"
+    }
+  ];
+
+  for (const step of steps) {
+    if (step.key === "callback" && extracted && extracted.phoneNumbers.length > 0) continue;
+    if (step.key === "link" && !hasLinkOrUpiOrPhone(input.lastScammerMessage)) continue;
+    if (asked(step.keywords)) continue;
+    return step.question;
+  }
+
+  return "Can you share a reference number?";
+}
+
+function buildReply(base: string, question?: string): string {
+  if (!question) return base;
+  const trimmed = base.trim();
+  if (trimmed.endsWith("?")) return trimmed;
+  return `${trimmed} ${question}`;
+}
+
+function isValid(reply: string, lastReplies: string[]): boolean {
   if (!reply) return false;
   if (reply.includes("\n")) return false;
-  const sentences = reply.split(/[.!?]+/).filter((s) => s.trim().length > 0);
-  if (sentences.length > 2) return false;
+  if (reply.length > 140) return false;
+  const lines = reply.split(/[.!?]+/).filter((s) => s.trim().length > 0);
+  if (lines.length > 2) return false;
   if (/\d{3,}/.test(reply)) return false;
   const lower = reply.toLowerCase();
-  if (forbidden.some((word) => lower.includes(word))) return false;
-  const recent = lastReplies.slice(-3);
-  if (recent.includes(reply)) return false;
+  if (forbidden.some((w) => lower.includes(w))) return false;
+  if (isRepeat(reply, lastReplies)) return false;
   return true;
 }
 
-function chooseBucket(message: string, turnNumber: number): string[] {
-  const normalized = message.toLowerCase();
-  const hasOtpOrPin = /\b(otp|pin)\b/.test(normalized);
-  const hasPressure = /urgent|blocked|immediately|suspended|verify/.test(normalized) || hasOtpOrPin;
-  const asksPayment = /upi|transfer|payment/.test(normalized);
-
-  if (hasOtpOrPin) {
-    return refusalPool;
-  }
-  if (hasPressure && turnNumber > 2) {
-    return Math.random() < 0.6 ? suspicionPool : verifyPool;
-  }
-  if (asksPayment) {
-    return Math.random() < 0.5 ? verifyPool : frictionPool;
-  }
-  if (hasPressure) {
-    return Math.random() < 0.5 ? confusionPool : frictionPool;
-  }
-  const roll = Math.random();
-  if (roll < 0.3) return confusionPool;
-  if (roll < 0.6) return frictionPool;
-  return verifyPool;
-}
-
-function pickReply(pool: string[], lastReplies: string[]): string {
+function pickFromPool(pool: string[], lastReplies: string[]): string {
   const shuffled = [...pool].sort(() => Math.random() - 0.5);
   for (const candidate of shuffled) {
-    if (isValidReply(candidate, lastReplies)) return candidate;
+    if (isValid(candidate, lastReplies)) return candidate;
   }
-  return "I'm calling SBI now, please hold.";
+  return pool[0] || "I'm not sure. Can you confirm your designation?";
 }
 
 export function writeReply(input: WriterInput): string {
-  const bucket = chooseBucket(input.lastScammerMessage || "", input.turnNumber || 1);
-  return pickReply(bucket, input.lastReplies || []);
+  const message = input.lastScammerMessage || "";
+  const normalized = normalize(message);
+  const hasOtpOrPin = /\b(otp|pin)\b/.test(normalized);
+  const hasPressure = /urgent|blocked|immediately|suspended|verify/.test(normalized);
+  const linkPressure = /link|click|upi|payment/.test(normalized);
+
+  const askQuestion = pickAskQuestion(input);
+
+  let base = "";
+  if (hasOtpOrPin) {
+    base = pickFromPool(humanResistancePool, input.lastReplies);
+    const withAsk = buildReply(base, askQuestion);
+    return isValid(withAsk, input.lastReplies) ? withAsk : base;
+  }
+
+  if (linkPressure) {
+    base = pickFromPool(humanResistancePool, input.lastReplies);
+    const withAsk = buildReply(base, askQuestion);
+    return isValid(withAsk, input.lastReplies) ? withAsk : base;
+  }
+
+  if (hasPressure || input.stressScore > 0.6) {
+    base = pickFromPool(softCompliancePool, input.lastReplies);
+    const withAsk = buildReply(base, askQuestion);
+    return isValid(withAsk, input.lastReplies) ? withAsk : base;
+  }
+
+  const roll = Math.random();
+  if (roll < 0.4) return pickFromPool(confusionPool, input.lastReplies);
+  if (roll < 0.75) return pickFromPool(frictionPool, input.lastReplies);
+  base = pickFromPool(humanResistancePool, input.lastReplies);
+  const withAsk = buildReply(base, askQuestion);
+  return isValid(withAsk, input.lastReplies) ? withAsk : base;
 }
 
 export type OpenAIWriter = (
