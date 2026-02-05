@@ -1,14 +1,29 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { LlmExtraction, AnalystOutput } from "../utils/types";
+
+export type ExtractedIntel = {
+  employee_codes: string[];
+  case_ids: string[];
+  phone_numbers: string[];
+  upi_ids: string[];
+  bank_accounts: string[];
+  links: string[];
+};
+
+export type AnalystResult = {
+  extracted: ExtractedIntel;
+  scamScore: number;
+  triggers: string[];
+};
 
 const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 
-const EMPTY_EXTRACTION: LlmExtraction = {
+const EMPTY_INTEL: ExtractedIntel = {
   employee_codes: [],
   case_ids: [],
   phone_numbers: [],
   upi_ids: [],
-  bank_account_digits: []
+  bank_accounts: [],
+  links: []
 };
 
 function extractJson(text: string): any | null {
@@ -28,54 +43,14 @@ function normalizeArray(values: unknown): string[] {
   return values.map((v) => String(v).trim()).filter(Boolean);
 }
 
-function mergeExtraction(base: LlmExtraction, next: LlmExtraction): LlmExtraction {
-  const merge = (a: string[], b: string[]) =>
-    Array.from(new Set([...a, ...b].map((v) => v.trim()).filter(Boolean)));
-  return {
-    employee_codes: merge(base.employee_codes, next.employee_codes),
-    case_ids: merge(base.case_ids, next.case_ids),
-    phone_numbers: merge(base.phone_numbers, next.phone_numbers),
-    upi_ids: merge(base.upi_ids, next.upi_ids),
-    bank_account_digits: merge(base.bank_account_digits, next.bank_account_digits)
-  };
-}
-
-function triggerScamScore(text: string): { score: number; triggers: string[] } {
-  const t = text.toLowerCase();
-  const triggers: string[] = [];
-  const hasOtp = /(otp|pin|cvv|password)/.test(t);
-  const hasUrgency = /(urgent|immediately|within|blocked|suspended|asap|today)/.test(t);
-  const hasFinancial = /(pay|transfer|send money|collect|upi|payment|refund)/.test(t);
-  const hasThreat = /(blocked|suspended|legal|fine|penalty|complaint|arrest)/.test(t);
-  const hasLink = /(http:\/\/|https:\/\/|bit\.ly|tinyurl|link)/.test(t);
-
-  if (hasOtp) {
-    triggers.push("otp_request");
-    return { score: 0.95, triggers };
-  }
-  if (hasUrgency && hasFinancial) {
-    triggers.push("urgency_financial");
-    return { score: 0.9, triggers };
-  }
-  if (hasThreat && hasLink) {
-    triggers.push("threat_link");
-    return { score: 0.85, triggers };
-  }
-  if (hasFinancial || hasLink || hasUrgency || hasThreat) {
-    triggers.push("suspicious");
-    return { score: 0.75, triggers };
-  }
-  return { score: 0.4, triggers };
-}
-
 export async function analyzeMessage(
   message: string,
-  prior: LlmExtraction,
+  prior: ExtractedIntel,
   timeoutMs: number
-): Promise<AnalystOutput> {
+): Promise<AnalystResult> {
   const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "";
   const modelName = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
-  let extracted = { ...EMPTY_EXTRACTION };
+  let extracted = { ...EMPTY_INTEL };
 
   if (apiKey) {
     try {
@@ -83,7 +58,7 @@ export async function analyzeMessage(
       const model = client.getGenerativeModel({ model: modelName });
       const prompt = [
         "Extract the following entities to JSON:",
-        "employee_codes, case_ids, phone_numbers, upi_ids, bank_account_digits.",
+        "employee_codes, case_ids, phone_numbers, upi_ids, bank_accounts, links.",
         "If a number is explicitly labeled 'Employee Code', extract it even if it's just '4567'.",
         "Return JSON only.",
         `message: ${message}`
@@ -99,20 +74,41 @@ export async function analyzeMessage(
           case_ids: normalizeArray(parsed.case_ids),
           phone_numbers: normalizeArray(parsed.phone_numbers),
           upi_ids: normalizeArray(parsed.upi_ids),
-          bank_account_digits: normalizeArray(parsed.bank_account_digits)
+          bank_accounts: normalizeArray(parsed.bank_accounts),
+          links: normalizeArray(parsed.links)
         };
       }
     } catch {
-      extracted = { ...EMPTY_EXTRACTION };
+      extracted = { ...EMPTY_INTEL };
     }
   }
 
-  const merged = mergeExtraction(prior, extracted);
-  const scoring = triggerScamScore(message);
+  const merge = (a: string[], b: string[]) =>
+    Array.from(new Set([...a, ...b].map((v) => v.trim()).filter(Boolean)));
 
-  return {
-    extracted: merged,
-    scamScore: scoring.score,
-    triggers: scoring.triggers
+  const merged: ExtractedIntel = {
+    employee_codes: merge(prior.employee_codes, extracted.employee_codes),
+    case_ids: merge(prior.case_ids, extracted.case_ids),
+    phone_numbers: merge(prior.phone_numbers, extracted.phone_numbers),
+    upi_ids: merge(prior.upi_ids, extracted.upi_ids),
+    bank_accounts: merge(prior.bank_accounts, extracted.bank_accounts),
+    links: merge(prior.links, extracted.links)
   };
+
+  const t = message.toLowerCase();
+  const triggers: string[] = [];
+  let scamScore = 0.4;
+
+  if (/(otp)/.test(t) && /(urgent|immediately|asap)/.test(t)) {
+    scamScore = 1.0;
+    triggers.push("otp_urgent");
+  } else if (/(pay|payment|transfer|send money)/.test(t) && /(link|http|https|bit\.ly)/.test(t)) {
+    scamScore = 0.9;
+    triggers.push("pay_link");
+  } else if (/(blocked|suspended)/.test(t) && /(verify|verification|kyc)/.test(t)) {
+    scamScore = 0.8;
+    triggers.push("blocked_verify");
+  }
+
+  return { extracted: merged, scamScore, triggers };
 }
