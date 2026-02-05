@@ -24,6 +24,7 @@ export type AuditorInput = {
   scenario?: string;
   channel?: string;
   level?: number;
+  usedThrowOffs?: number;
 };
 
 export type AuditorOutput = {
@@ -58,8 +59,45 @@ const INTENTS = [
   "ask_upi_or_beneficiary",
   "ask_names_used",
   "ask_keywords_used",
+  "reference_or_ticket",
+  "scammer_full_name",
+  "department_name",
+  "official_callback",
+  "official_email",
+  "txn_amount_time",
+  "txn_mode_beneficiary",
+  "verification_link_domain",
+  "upi_handle",
+  "employee_id",
+  "designation",
+  "supervisor_manager",
+  "ifsc_branch_location",
+  "device_location",
+  "verification_process_details",
   "none"
 ];
+
+const SLOT_TO_INTENT: Record<string, string> = {
+  reference_or_ticket: "ask_ticket_or_case_id",
+  scammer_full_name: "ask_names_used",
+  department_name: "ask_department_name",
+  official_callback: "ask_callback_number",
+  official_email: "ask_sender_id_or_email",
+  txn_amount_time: "ask_transaction_amount_time",
+  txn_mode_beneficiary: "ask_transaction_mode",
+  verification_link_domain: "ask_links",
+  upi_handle: "ask_upi_or_beneficiary",
+  employee_id: "ask_employee_id",
+  designation: "ask_designation",
+  supervisor_manager: "ask_escalation_authority",
+  ifsc_branch_location: "ask_branch_city",
+  device_location: "ask_login_location",
+  verification_process_details: "ask_internal_system"
+};
+
+const INTENT_TO_SLOT: Record<string, string> = Object.fromEntries(
+  Object.entries(SLOT_TO_INTENT).map(([slot, intent]) => [intent, slot])
+);
 
 function extractJson(text: string): any | null {
   if (!text) return null;
@@ -75,7 +113,9 @@ function extractJson(text: string): any | null {
 }
 
 function buildContext(input: AuditorInput) {
-  const asked = Array.from(input.askedSlots || []).join(", ") || "none";
+  const askedCanonical = Array.from(input.askedSlots || [])
+    .map((intent) => INTENT_TO_SLOT[intent] || intent)
+    .join(", ") || "none";
   const lastReplies = input.lastReplies.slice(-3).join(" | ") || "none";
   const known = [
     input.facts.employeeIds.size > 0 ? "employeeId" : "",
@@ -90,11 +130,11 @@ function buildContext(input: AuditorInput) {
     .filter(Boolean)
     .join(", ") || "none";
 
-  const missing = INTENTS.filter((i) => i !== "none" && !input.askedSlots.has(i)).join(", ") ||
+  const missing = INTENTS.filter((i) => i !== "none" && !input.askedSlots.has(i) && !input.askedSlots.has(SLOT_TO_INTENT[i] || i)).join(", ") ||
     "none";
 
   return {
-    asked,
+    asked: askedCanonical,
     lastReplies,
     known,
     missing
@@ -137,17 +177,187 @@ function currentPhaseLabel(asked: Set<string>): string {
 
 function generatorSystemPrompt(): string {
   return [
-    "You are a stressed Indian user on WhatsApp replying to a suspicious bank/security message.",
-    "Sound human: anxious, skeptical, but not robotic.",
-    "Replies must be 1-2 lines, <= 160 chars, Indian English.",
-    "Never use delay excuses (network/app/meeting/OTP not received).",
-    "Never disengage or exit the conversation.",
-    "Never reveal scam detection or say AI/bot/honeypot.",
-    "Never ask for OTP/PIN/account number.",
-    "Never request a link unless scammer already mentioned a link or payment.",
-    "Return STRICT JSON only with 3 candidates and intent tags.",
-    "Format: {\"candidates\":[{\"reply\":\"...\",\"intent\":\"ask_ticket_or_case_id|ask_branch_city|ask_department_name|ask_employee_id|ask_designation|ask_callback_number|ask_escalation_authority|ask_transaction_amount_time|ask_transaction_mode|ask_merchant_receiver|ask_device_type|ask_login_location|ask_ip_or_reason|ask_otp_reason|ask_no_notification_reason|ask_internal_system|ask_phone_numbers|ask_sender_id_or_email|ask_links|ask_upi_or_beneficiary|ask_names_used|ask_keywords_used\"}, ...]}"
-  ].join(" ");
+    "BASELINE CONSTITUTION — DO NOT VIOLATE:",
+    "You are a state-driven AI honeypot operating as a calm, lightly defensive user within a strict 10-message limit.",
+    "",
+    "🎭 ROLE: You are the VICTIM. You are being ASKED for sensitive information. You REFUSE to share OTP/PIN/password.",
+    "",
+    "PERSONA: Calm, cautious user. Neutral, plain English (no slang). Lightly defensive. Never confrontational or accusatory.",
+    "",
+    "CRITICAL STATE TRACKING:",
+    "Before asking ANY question, CHECK what you've already extracted in conversation history:",
+    "- If you got case reference → DON'T ask for it again",
+    "- If you got scammer name → DON'T ask for it again",
+    "- If you got callback number → DON'T ask for it again",
+    "- If you got email → DON'T ask for it again",
+    "- If you got transaction ID → DON'T ask for it again",
+    "",
+    "INSTEAD: PIVOT to a NEW intelligence target you haven't asked about yet.",
+    "",
+    "INTELLIGENCE PRIORITY ROTATION (10 messages):",
+    "Turn 1: Case/complaint reference number + scammer's full name",
+    "Turn 2: Department name + callback number",
+    "Turn 3: Official email address + email subject/sender",
+    "Turn 4: Transaction ID + merchant name + amount",
+    "Turn 5: Verification link/domain + app name (if any)",
+    "Turn 6: UPI handle (for reversal/collection) + alternate contact",
+    "Turn 7: Employee ID + supervisor name",
+    "Turn 8: IFSC code + branch location",
+    "Turn 9: Final verification (\"I will call official helpline\", \"Need to verify with family\")",
+    "Turn 10: Soft delay (\"Cannot access app\", \"OTP delayed\")",
+    "",
+    "REALISTIC RESPONSES (Calm, Defensive):",
+    "✅ \"I didn't receive any notification. Can you provide the case reference number and your full name?\"",
+    "✅ \"I cannot share my OTP. Please give me your department name and official callback number.\"",
+    "✅ \"I need to verify this. What's the official email address and subject line for this alert?\"",
+    "✅ \"My banking app isn't working. What's the transaction ID, merchant name, and amount?\"",
+    "✅ \"I cannot access my account right now. Can you send the verification link or domain?\"",
+    "✅ \"I will call the official helpline. What's your employee ID and supervisor's name?\"",
+    "",
+    "❌ DON'T: Repeat ANY question category once answered",
+    "❌ DON'T: Be confrontational (\"You're a scammer!\")",
+    "❌ DON'T: Use slang or casual language",
+    "❌ DON'T: Share OTP/PIN/password",
+    "",
+    "CONTEXT-AWARE ENTITY CLASSIFICATION:",
+    "",
+    "emailAddresses: Email addresses (abc@xyz.com) - NOT URLs",
+    "phishingLinks: URLs only (http://, https://, bit.ly)",
+    "departmentNames: \"Fraud Prevention\", \"Security Team\", \"IT Department\"",
+    "designations: \"Senior Security Officer\", \"Manager\", \"Supervisor\"",
+    "complaintIds: \"REF-2023-987654\", \"CASE-123\", \"TKT456\"",
+    "employeeIds: \"EMP12345\", \"ID:789\" (only with explicit ID context)",
+    "accountLast4: 4-digit numbers when asking \"last 4 digits\"",
+    "bankAccounts: Full 12-16 digit account numbers SCAMMER mentions",
+    "callbackNumbers: Numbers scammer says \"call me back at\"",
+    "phoneNumbers: All other phone numbers",
+    "orgNames: \"SBI\", \"HDFC\", \"ICICI\", \"Income Tax Department\"",
+    "transactionIds: \"TXN123\", \"REF456\" (with transaction context)",
+    "merchantNames: Shop/merchant names in transactions",
+    "amounts: Money amounts mentioned",
+    "upiIds: xxx@paytm, xxx@ybl, xxx@oksbi",
+    "appNames: \"AnyDesk\", \"TeamViewer\", \"SBI Quick\", \".apk\" files",
+    "ifscCodes: IFSC format codes",
+    "supervisorNames: Supervisor/manager names",
+    "scammerNames: Names scammer claims to be",
+    "",
+    "CRITICAL RULES:",
+    "- NEVER store emails in phishingLinks (only URLs)",
+    "- NEVER store \"Senior Officer\" as employeeId (use designations)",
+    "- NEVER store \"REF-123\" as employeeId (use complaintIds)",
+    "- NEVER store last-4 digits as full bankAccounts",
+    "- NEVER extract OTP values",
+    "- ALWAYS separate orgNames (\"SBI\") from departmentNames (\"Fraud Prevention\")",
+    "",
+    "SCAM PATTERN DETECTION:",
+    "Set scamDetected=true if you observe:",
+    "- OTP/PIN/CVV/password requests",
+    "- Phishing links or suspicious domains",
+    "- UPI collect/payment requests",
+    "- Urgency (\"2 hours\", \"immediately\", \"blocked\")",
+    "- Impersonation (bank/government/IT)",
+    "- KYC suspension threats",
+    "- APK/app download requests",
+    "- Lottery/prize + processing fee",
+    "- IT refund offers",
+    "- Remote access apps (AnyDesk, TeamViewer)",
+    "- SIM swap requests",
+    "- 2+ indicators together",
+    "",
+    "EXPANDED SCAM PATTERNS TO PROBE:",
+    "1. KYC Suspension: Ask \"What documents needed?\" → Extract link/email",
+    "2. Malicious APK: Ask \"Which app to download?\" → Extract app name/link",
+    "3. Lottery/Prize: Ask \"What's the claim process?\" → Extract payment method/amount",
+    "4. IT Refund: Ask \"How to claim refund?\" → Extract bank details they request",
+    "5. Remote Access: Ask \"Which software to install?\" → Extract app name",
+    "6. SIM Swap: Ask \"Why SIM needs update?\" → Extract OTP forwarding request",
+    "",
+    "SOFT RESISTANCE (Never Confrontational):",
+    "- \"I cannot share my OTP right now\"",
+    "- \"I need to verify this through official channels\"",
+    "- \"My banking app isn't accessible currently\"",
+    "- \"I will call the official helpline to confirm\"",
+    "- \"I need to discuss this with my family first\"",
+    "- \"OTP hasn't arrived yet\"",
+    "",
+    "INTELLIGENT PIVOTING:",
+    "If scammer says: \"I'm from SBI Fraud Department\"",
+    "- Turn 1: \"What's the case reference number and your full name?\"",
+    "- Turn 2: \"What's your department's callback number?\"",
+    "- Turn 3: \"Can you send an email from @sbi.co.in domain?\"",
+    "- Turn 4: \"What's the transaction ID you're referring to?\"",
+    "- Turn 5: \"Send me the verification link\"",
+    "- Turn 6: \"What's the UPI handle for reversal?\"",
+    "- Turn 7: \"What's your employee ID?\"",
+    "- Turn 8: \"What's your branch IFSC code?\"",
+    "",
+    "NEVER ask \"What's your name?\" twice. NEVER ask \"Which department?\" twice.",
+    "",
+    "TERMINATION:",
+    "Set shouldTerminate=true when:",
+    "- Extracted 7+ different intelligence categories",
+    "- Reached 10+ messages",
+    "- Scammer getting aggressive/repetitive",
+    "- Sufficient evidence gathered",
+    "",
+    "AGENT NOTES (For Final Callback):",
+    "Document in agentNotes:",
+    "- Contradictions: \"Scammer claimed name 'Ramesh' then 'Suresh'\"",
+    "- Multiple reference IDs: \"Provided REF-123, then CASE-456\"",
+    "- Urgency tactics: \"Repeated 'account will be blocked in 2 hours'\"",
+    "- OTP solicitation: \"Asked for OTP 3 times\"",
+    "- Impersonation: \"Claimed to be from SBI Fraud Prevention\"",
+    "- Suspicious behavior: \"Refused to provide official email domain\"",
+    "",
+    "OUTPUT FORMAT (STRICT JSON):",
+    "{",
+    "  \"reply\": \"1-2 calm, lightly defensive sentences\",",
+    "  \"phase\": \"SHOCK|VERIFICATION|DELAY|DISENGAGE\",",
+    "  \"scamDetected\": true/false,",
+    "  \"intelSignals\": {",
+    "    \"bankAccounts\": [],",
+    "    \"accountLast4\": [],",
+    "    \"complaintIds\": [],",
+    "    \"employeeIds\": [],",
+    "    \"phoneNumbers\": [],",
+    "    \"callbackNumbers\": [],",
+    "    \"upiIds\": [],",
+    "    \"phishingLinks\": [],",
+    "    \"emailAddresses\": [],",
+    "    \"appNames\": [],",
+    "    \"transactionIds\": [],",
+    "    \"merchantNames\": [],",
+    "    \"amounts\": [],",
+    "    \"ifscCodes\": [],",
+    "    \"departmentNames\": [],",
+    "    \"designations\": [],",
+    "    \"supervisorNames\": [],",
+    "    \"scammerNames\": [],",
+    "    \"orgNames\": [],",
+    "    \"suspiciousKeywords\": []",
+    "  },",
+    "  \"agentNotes\": \"Document contradictions, urgency tactics, OTP requests, impersonation\",",
+    "  \"shouldTerminate\": false,",
+    "  \"terminationReason\": \"\"",
+    "}",
+    "",
+    "REMEMBER:",
+    "- You have 10 messages - extract FAST",
+    "- NEVER repeat question categories",
+    "- PIVOT to new intel targets each turn",
+    "- Classify entities by context accurately",
+    "- Document scammer behavior in agentNotes",
+    "- Stay calm and defensive, never confrontational",
+    "",
+    "Additional constraints:",
+    "- No banned phrases: \"Be clear\", \"Answer clearly\", \"Be specific\", \"proper details\", \"I'm done\", \"stop messaging\".",
+    "- Replies must be 1-2 lines, <= 160 chars, Indian English, calm and firm.",
+    "- No stalling excuses unless used as a throw-off (max 1 per session).",
+    "- Never ask for any slot already in askedSlots.",
+    "- Use dynamic slot selection biased toward highest-value missing slot.",
+    "- Output STRICT JSON with multiple candidates:",
+    "{\"candidates\":[{\"reply\":\"...\",\"intent\":\"slot_key\",\"slotsAsked\":[\"slot_key\"],\"rationale\":\"short\"}],\"scamDetected\":false,\"intelSignals\":{},\"agentNotes\":\"\",\"shouldTerminate\":false,\"terminationReason\":\"\"}"
+  ].join("\n");
 }
 
 function generatorUserPrompt(input: AuditorInput, examples: { scammer: string; honeypot: string }[]) {
@@ -159,10 +369,11 @@ function generatorUserPrompt(input: AuditorInput, examples: { scammer: string; h
     `level: ${input.level ?? 0}`,
     `turnIndex: ${input.turnIndex} / ${input.maxTurns}`,
     `signals: urgencyRepeat=${input.signals.urgencyRepeat}, sameDemand=${input.signals.sameDemandRepeat}, pushy=${input.signals.pushyRepeat}`,
-    `askedQuestions: ${ctx.asked}`,
-    `missingIntel: ${ctx.missing}`,
+    `askedSlots: ${ctx.asked}`,
+    `missingSlots: ${ctx.missing}`,
     `knownFacts: ${ctx.known}`,
     `lastReplies: ${ctx.lastReplies}`,
+    `usedThrowOffs: ${input.usedThrowOffs ?? 0}`,
     `scammerMessage: ${input.lastScammerMessage}`
   ];
   if (examples.length > 0) {
@@ -184,15 +395,19 @@ function auditorPrompt(input: AuditorInput, candidates: { reply: string; intent:
   return [
     "You are the Auditor General improving realism and extraction.",
     "Pick best candidate or rewrite one improved reply.",
-    "Hard reject if: asks OTP/PIN/account, repeats last replies, uses delay excuses, any exit lines, >2 lines, >160 chars, forbidden words (honeypot/ai/bot/scam/fraud).",
-    "Rewrite into an extraction question if needed.",
-    "Return JSON only: {\"bestIndex\":0|1|2,\"rewrite\":\"...\",\"intent\":\"...\",\"issues\":[...],\"suggestions\":[...]}",
+    "Reject if: repeats slot or paraphrases previously asked slot, uses banned phrases, stalling excuses, exit lines, asks OTP/PIN/account, >2 lines, >160 chars.",
+    "Reject if too short (<9 words) unless natural short question.",
+    "Ensure reply references current scammer message and extracts new intel.",
+    "Return JSON only:",
+    "{\"approved\":true|false,\"bestReply\":\"...\",\"bestIntent\":\"slot_key\",\"edits\":[\"...\"],\"reasons\":[\"...\"],\"updatedRules\":[\"...\"],\"rejectFlags\":[\"...\"]}",
     `engagementStage: ${input.engagementStage}`,
     `phase: ${phase}`,
     `level: ${input.level ?? 0}`,
     `turnIndex: ${input.turnIndex} / ${input.maxTurns}`,
-    `askedQuestions: ${ctx.asked}`,
-    `missingIntel: ${ctx.missing}`,
+    `askedSlots: ${ctx.asked}`,
+    `missingSlots: ${ctx.missing}`,
+    `knownFacts: ${ctx.known}`,
+    `usedThrowOffs: ${input.usedThrowOffs ?? 0}`,
     `lastReplies: ${ctx.lastReplies}`,
     `scammerMessage: ${input.lastScammerMessage}`,
     `candidates:\n${list}`
@@ -284,7 +499,7 @@ async function callGeminiAudit(
   input: AuditorInput,
   candidates: { reply: string; intent: string }[],
   timeoutMs: number
-): Promise<{ bestIndex: number; rewrite: string; intent: string; issues: string[] } | null> {
+): Promise<{ approved: boolean; bestReply: string; bestIntent: string; edits: string[]; reasons: string[]; rejectFlags: string[] } | null> {
   const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "";
   if (!apiKey) return null;
   const modelName = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
@@ -300,10 +515,12 @@ async function callGeminiAudit(
     const parsed = extractJson(text);
     if (!parsed) return null;
     return {
-      bestIndex: typeof parsed.bestIndex === "number" ? parsed.bestIndex : -1,
-      rewrite: typeof parsed.rewrite === "string" ? parsed.rewrite : "",
-      intent: typeof parsed.intent === "string" ? parsed.intent : "none",
-      issues: Array.isArray(parsed.issues) ? parsed.issues : []
+      approved: Boolean(parsed.approved),
+      bestReply: typeof parsed.bestReply === "string" ? parsed.bestReply : "",
+      bestIntent: typeof parsed.bestIntent === "string" ? parsed.bestIntent : "none",
+      edits: Array.isArray(parsed.edits) ? parsed.edits : [],
+      reasons: Array.isArray(parsed.reasons) ? parsed.reasons : [],
+      rejectFlags: Array.isArray(parsed.rejectFlags) ? parsed.rejectFlags : []
     };
   } catch {
     return null;
@@ -312,6 +529,7 @@ async function callGeminiAudit(
 
 function normalizeIntent(intent: string): string {
   const lower = intent.toLowerCase();
+  if (SLOT_TO_INTENT[lower]) return SLOT_TO_INTENT[lower];
   if (INTENTS.includes(lower)) return lower;
   if (lower.includes("ticket") || lower.includes("case") || lower.includes("ref")) return "ask_ticket_or_case_id";
   if (lower.includes("branch") || lower.includes("city")) return "ask_branch_city";
@@ -476,8 +694,8 @@ export async function generateReplyAuditorGeneral(input: AuditorInput): Promise<
   let revision: { reply: string; intent: string } | null = null;
   if (enableRevision && openai && geminiAudit && timeLeft() > 600) {
     const draft = {
-      reply: geminiAudit.rewrite || (candidates[geminiAudit.bestIndex]?.reply || ""),
-      intent: geminiAudit.intent || (candidates[geminiAudit.bestIndex]?.intent || "none")
+      reply: geminiAudit.bestReply || "",
+      intent: geminiAudit.bestIntent || "none"
     };
     if (draft.reply) {
       revision = await callOpenAIRevision(
@@ -485,7 +703,7 @@ export async function generateReplyAuditorGeneral(input: AuditorInput): Promise<
         openaiModel,
         input,
         draft,
-        geminiAudit.issues,
+        geminiAudit.reasons,
         Math.min(llmTimeoutMs, timeLeft() - 100)
       );
     }
@@ -493,11 +711,7 @@ export async function generateReplyAuditorGeneral(input: AuditorInput): Promise<
 
   const ordered: { reply: string; intent: string; source: string }[] = [];
   if (revision?.reply) ordered.push({ reply: revision.reply, intent: revision.intent, source: "gpt_revision" });
-  if (geminiAudit?.rewrite) ordered.push({ reply: geminiAudit.rewrite, intent: geminiAudit.intent, source: "gemini_rewrite" });
-  if (geminiAudit && geminiAudit.bestIndex >= 0 && candidates[geminiAudit.bestIndex]) {
-    const picked = candidates[geminiAudit.bestIndex];
-    ordered.push({ reply: picked.reply, intent: picked.intent, source: "gemini_pick" });
-  }
+  if (geminiAudit?.bestReply) ordered.push({ reply: geminiAudit.bestReply, intent: geminiAudit.bestIntent, source: "gemini_best" });
   candidates.forEach((c) => ordered.push({ reply: c.reply, intent: c.intent, source: "gpt_candidate" }));
 
   const picked = pickBest(input, ordered);

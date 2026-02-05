@@ -436,7 +436,8 @@ const handleHoneypot = async (req: Request, res: Response) => {
         signals: engagementSignals,
         scenario: bodyTyped.metadata?.channel || "default",
         channel: bodyTyped.metadata?.channel,
-        level: session.level
+        level: session.level,
+        usedThrowOffs: session.usedThrowOffs
       });
       reply = audit.reply;
       chosenIntent = audit.chosenIntent || planner.nextSlot;
