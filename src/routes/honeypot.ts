@@ -7,7 +7,8 @@ import { SessionMessage, SessionStore } from "../core/sessionStore";
 import { sendFinalCallback } from "../core/callback";
 import { summarize } from "../core/summarizer";
 import { generateReplyOpenAI } from "../core/openaiWriter";
-import { generateReplyCouncil } from "../core/council";
+import { generateReplyAuditorGeneral } from "../core/auditorGeneral";
+import { logDecision, logMessage } from "../core/supabase";
 import {
   maskDigits,
   safeLog,
@@ -144,6 +145,15 @@ router.post("/honeypot", async (req: Request, res: Response) => {
     if (session.messages.length > 30) {
       session.messages = session.messages.slice(-30);
     }
+    void logMessage({
+      sessionId: session.sessionId,
+      turnIndex: session.engagement.totalMessagesExchanged + 1,
+      sender: "scammer",
+      text: messageText,
+      timestamp: messageTimestamp,
+      channel: bodyTyped.metadata?.channel,
+      scenario: bodyTyped.metadata?.channel || "default"
+    });
 
     const historyTexts = conversationHistory.map((m) => m.text);
     const texts = [messageText, ...historyTexts];
@@ -252,6 +262,7 @@ router.post("/honeypot", async (req: Request, res: Response) => {
       session.runningSummary || summarize(conversationHistory, merged, session.story, session.persona);
     let reply = "";
     let councilNotes = "";
+    let chosenIntent = "none";
     const writerInput = {
       nextIntent: planner.nextIntent,
       state: planner.updatedState,
@@ -265,36 +276,38 @@ router.post("/honeypot", async (req: Request, res: Response) => {
       personaStage: session.personaStage,
       askedQuestions: session.askedQuestions
     };
-    const councilEnabled =
-      process.env.COUNCIL_MODE === "true" &&
-      session.personaStage !== "DEFENSIVE" &&
-      session.personaStage !== "DONE";
-    if (councilEnabled) {
-      const council = await generateReplyCouncil({
+    const councilEnabled = process.env.COUNCIL_MODE !== "false";
+    if (session.personaStage === "DONE") {
+      reply = writeReply(writerInput);
+      chosenIntent = "none";
+      councilNotes = "stage_done";
+    } else if (councilEnabled) {
+      const audit = await generateReplyAuditorGeneral({
         sessionId: session.sessionId,
         lastScammerMessage: messageText,
         conversationHistory,
-        extractedIntel: {
-          bankAccounts: merged.bankAccounts,
-          upiIds: merged.upiIds,
-          phishingLinks: merged.phishingLinks,
-          phoneNumbers: merged.phoneNumbers,
-          suspiciousKeywords: merged.suspiciousKeywords
-        },
+        extractedIntel: merged,
+        facts: session.facts,
+        personaStage: session.personaStage || "CONFUSED",
+        askedQuestions: session.askedQuestions || new Set<string>(),
         lastReplies: session.lastReplies,
-        turnCount: session.engagement.totalMessagesExchanged + 1,
+        turnIndex: session.engagement.totalMessagesExchanged + 1,
         scamScore: scores.scamScore,
         stressScore: scores.stressScore,
-        storySummary: summary
+        signals: personaSignals,
+        scenario: bodyTyped.metadata?.channel || "default",
+        channel: bodyTyped.metadata?.channel
       });
-      reply = council.reply;
-      councilNotes = council.agentNotes;
-      if (!isReplySafe(reply, session.lastReplies, session.personaStage || "CONFUSED")) {
-        reply = writeReply(writerInput);
-        councilNotes = councilNotes ? `${councilNotes}, fallback=writer` : "fallback=writer";
-      }
+      reply = audit.reply;
+      chosenIntent = audit.chosenIntent || "none";
+      councilNotes = audit.notes || "";
     } else {
       reply = await writeReplySmart(writerInput, session.persona, summary, generateReplyOpenAI);
+    }
+    if (!isReplySafe(reply, session.lastReplies, session.personaStage || "CONFUSED")) {
+      reply = writeReply(writerInput);
+      councilNotes = councilNotes ? `${councilNotes}, fallback=writer` : "fallback=writer";
+      chosenIntent = chosenIntent || "none";
     }
     if (!reply || reply.trim().length === 0) {
       reply = "OK";
@@ -305,6 +318,25 @@ router.post("/honeypot", async (req: Request, res: Response) => {
     if (session.messages.length > 30) {
       session.messages = session.messages.slice(-30);
     }
+    if (chosenIntent && chosenIntent !== "none") {
+      session.askedQuestions.add(chosenIntent);
+    }
+    void logMessage({
+      sessionId: session.sessionId,
+      turnIndex: turnCount,
+      sender: "honeypot",
+      text: reply,
+      timestamp: nowIso,
+      channel: bodyTyped.metadata?.channel,
+      scenario: bodyTyped.metadata?.channel || "default"
+    });
+    void logDecision({
+      sessionId: session.sessionId,
+      turnIndex: turnCount,
+      personaStage: session.personaStage || "CONFUSED",
+      chosenIntent: chosenIntent || planner.nextIntent,
+      reply
+    });
 
     const now = new Date().toISOString();
     session.state = planner.updatedState;

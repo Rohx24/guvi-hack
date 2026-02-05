@@ -16,8 +16,17 @@ Create a `.env` file (you can copy `.env.example`):
 ```bash
 API_KEY=your-secret-key
 OPENAI_API_KEY=your-openai-key
-LLM_MODEL=gpt-4o-mini
-OPENAI_TIMEOUT_MS=2800
+OPENAI_MODEL=gpt-4o-mini
+GEMINI_API_KEY=your-gemini-key
+GEMINI_MODEL=gemini-2.5-pro
+COUNCIL_MODE=true
+COUNCIL_BUDGET_MS=3500
+LLM_TIMEOUT_MS=2800
+ENABLE_GPT_REVISION=true
+ENABLE_SUPABASE_LOG=true
+ENABLE_SUPABASE_RETRIEVAL=false
+SUPABASE_URL=your-supabase-url
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 PORT=3000
 SESSION_PERSIST=false
 SESSIONS_FILE=sessions.json
@@ -78,28 +87,7 @@ Required header:
 ```json
 {
   "status":"success",
-  "sessionId":"...",
-  "scamDetected": true,
-  "scamScore": 0.82,
-  "stressScore": 0.64,
-  "engagement": {
-    "mode": "SCAM_CONFIRMED",
-    "totalMessagesExchanged": 3,
-    "agentMessagesSent": 3,
-    "scammerMessagesReceived": 3,
-    "startedAt": "ISO-8601",
-    "lastMessageAt": "ISO-8601"
-  },
-  "reply":"...",
-  "extractedIntelligence": {
-    "bankAccounts":["..."],
-    "upiIds":["..."],
-    "phishingLinks":["..."],
-    "phoneNumbers":["..."],
-    "emails":["..."],
-    "suspiciousKeywords":["urgent","otp"]
-  },
-  "agentNotes":"..."
+  "reply":"..."
 }
 ```
 
@@ -117,10 +105,35 @@ curl -X POST http://localhost:3000/api/honeypot \
 ```
 
 ## Final Callback
-When mode becomes `COMPLETE` (or after `MAX_TURNS`, default 14) and `scamDetected=true`, the service posts to:
+When persona reaches `DONE` (or after `MAX_TURNS`) and `scamDetected=true`, the service posts to:
 - `https://hackathon.guvi.in/api/updateHoneyPotFinalResult`
 
 It retries up to 2 times with a 5s timeout.
+
+## Supabase Schema (Optional)
+```sql
+create table if not exists honeypot_messages (
+  id uuid primary key default gen_random_uuid(),
+  session_id text,
+  turn_index int,
+  sender text,
+  text text,
+  ts timestamptz,
+  scenario text,
+  channel text,
+  created_at timestamptz default now()
+);
+
+create table if not exists honeypot_decisions (
+  id uuid primary key default gen_random_uuid(),
+  session_id text,
+  turn_index int,
+  persona_stage text,
+  chosen_intent text,
+  reply text,
+  created_at timestamptz default now()
+);
+```
 
 ## Deployment Notes
 - Set `API_KEY` in your hosting environment.
