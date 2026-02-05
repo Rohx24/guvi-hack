@@ -8,6 +8,9 @@ export type ExtractedIntelligence = {
   emails: string[];
   suspiciousKeywords: string[];
   employeeIds: string[];
+  caseIds: string[];
+  tollFreeNumbers: string[];
+  senderIds: string[];
 };
 
 const suspiciousKeywordList = [
@@ -42,7 +45,10 @@ const suspiciousKeywordList = [
   "link",
   "click",
   "password",
-  "pin"
+  "pin",
+  "ticket",
+  "case",
+  "reference"
 ];
 
 const phoneRegex = /(?:\+91[\s-]?)?(?:0)?[6-9]\d{9}/g;
@@ -52,6 +58,11 @@ const paymentLinkRegex = /(?:upi:\/\/pay|payto:)[^\s]+/gi;
 const upiRegex = /[a-zA-Z0-9._-]{2,}@(upi|ybl|okhdfcbank|oksbi|okicici|okaxis|okpaytm|paytm|ibl|axl|sbi|hdfcbank|icici|kotak|baroda|upiicici)/gi;
 const bankAccountRegex = /\b\d{11,18}\b/g;
 const employeeIdRegex = /\b(?:employee|emp|staff)\s*(?:id|code|no|number)?\s*[:#-]?\s*([a-z0-9-]{3,12})\b/gi;
+const employeeIdShortRegex = /\bemp\d{3,}\b/gi;
+const caseIdRegex = /\b(?:case|ticket|ref|reference)[- ]?[a-z0-9]{3,}\b/gi;
+const tollFreeRegex = /\b(1800|1860|1861|1850)[- ]?\d{3,8}\b/g;
+const senderIdRegex = /\b(?:sender id|sms id|from)[:\\s]*([A-Z0-9-]{4,10})\b/g;
+const senderIdBareRegex = /\b[A-Z]{2}[A-Z0-9]{4,6}\b/g;
 
 export function normalizeText(text: string): string {
   return text
@@ -94,6 +105,13 @@ export function extractIntelligence(texts: string[]): ExtractedIntelligence {
   const upiIds: string[] = normalized.match(upiRegex) || [];
   const bankDigits: string[] = normalized.match(bankAccountRegex) || [];
   const employeeIds = Array.from(normalized.matchAll(employeeIdRegex)).map((m) => m[1]);
+  const employeeIdsShort = normalized.match(employeeIdShortRegex) || [];
+  const caseIds = normalized.match(caseIdRegex) || [];
+  const tollFreeNumbers = (combined.match(tollFreeRegex) || []).map((v) =>
+    v.replace(/\s|-/g, "")
+  );
+  const senderIds = Array.from(combined.matchAll(senderIdRegex)).map((m) => m[1]);
+  const senderIdsBare = combined.match(senderIdBareRegex) || [];
 
   const suspicious = suspiciousKeywordList.filter((kw) => normalized.includes(kw));
 
@@ -104,7 +122,10 @@ export function extractIntelligence(texts: string[]): ExtractedIntelligence {
     phoneNumbers: uniqueMerge([], phones),
     emails: uniqueMerge([], emails),
     suspiciousKeywords: uniqueMerge([], suspicious),
-    employeeIds: uniqueMerge([], employeeIds)
+    employeeIds: uniqueMerge([], [...employeeIds, ...employeeIdsShort]),
+    caseIds: uniqueMerge([], caseIds),
+    tollFreeNumbers: uniqueMerge([], tollFreeNumbers),
+    senderIds: uniqueMerge([], [...senderIds, ...senderIdsBare])
   };
 }
 
@@ -119,7 +140,10 @@ export function mergeIntelligence(
     phoneNumbers: uniqueMerge(existing.phoneNumbers, incoming.phoneNumbers),
     emails: uniqueMerge(existing.emails, incoming.emails),
     suspiciousKeywords: uniqueMerge(existing.suspiciousKeywords, incoming.suspiciousKeywords),
-    employeeIds: uniqueMerge(existing.employeeIds, incoming.employeeIds)
+    employeeIds: uniqueMerge(existing.employeeIds, incoming.employeeIds),
+    caseIds: uniqueMerge(existing.caseIds || [], incoming.caseIds || []),
+    tollFreeNumbers: uniqueMerge(existing.tollFreeNumbers || [], incoming.tollFreeNumbers || []),
+    senderIds: uniqueMerge(existing.senderIds || [], incoming.senderIds || [])
   };
 }
 

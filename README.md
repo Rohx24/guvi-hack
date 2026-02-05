@@ -114,11 +114,11 @@ It retries up to 2 times with a 5s timeout.
 ```sql
 create table if not exists honeypot_messages (
   id uuid primary key default gen_random_uuid(),
-  session_id text,
-  turn_index int,
-  sender text,
-  text text,
-  ts timestamptz,
+  session_id text not null,
+  turn_index int not null,
+  sender text not null,
+  text text not null,
+  ts timestamptz not null,
   scenario text,
   channel text,
   created_at timestamptz default now()
@@ -126,11 +126,11 @@ create table if not exists honeypot_messages (
 
 create table if not exists honeypot_decisions (
   id uuid primary key default gen_random_uuid(),
-  session_id text,
-  turn_index int,
+  session_id text not null,
+  turn_index int not null,
   persona_stage text,
-  chosen_intent text,
-  reply text,
+  chosen_intent text not null,
+  reply text not null,
   created_at timestamptz default now()
 );
 ```

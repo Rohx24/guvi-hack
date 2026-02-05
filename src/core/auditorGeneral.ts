@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { ExtractedIntelligence } from "./extractor";
-import type { PersonaStage, PersonaSignals } from "./planner";
+import type { EngagementSignals, EngagementStage } from "./planner";
 import type { SessionFacts } from "./sessionStore";
 import { fetchSimilarExamples } from "./supabase";
 import { fallbackReplyForStage, validateReply } from "./validator";
@@ -13,13 +13,14 @@ export type AuditorInput = {
   conversationHistory: { sender: string; text: string; timestamp?: string }[];
   extractedIntel: ExtractedIntelligence;
   facts: SessionFacts;
-  personaStage: PersonaStage;
+  engagementStage: EngagementStage;
   askedQuestions: Set<string>;
   lastReplies: string[];
   turnIndex: number;
+  maxTurns: number;
   scamScore: number;
   stressScore: number;
-  signals: PersonaSignals;
+  signals: EngagementSignals;
   scenario?: string;
   channel?: string;
 };
@@ -34,13 +35,14 @@ const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
 const DEFAULT_GEMINI_MODEL = "gemini-2.5-pro";
 
 const INTENTS = [
-  "reference",
-  "designation",
-  "branch",
-  "callback",
-  "transaction",
-  "device",
-  "link",
+  "ask_ticket_or_case_id",
+  "ask_designation_and_branch",
+  "ask_official_callback_tollfree",
+  "ask_transaction_details",
+  "ask_device_location_details",
+  "ask_sender_id_or_email",
+  "ask_link_or_upi",
+  "ask_secure_process",
   "none"
 ];
 
@@ -57,22 +59,17 @@ function extractJson(text: string): any | null {
   }
 }
 
-function normalize(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function buildContext(input: AuditorInput) {
   const asked = Array.from(input.askedQuestions || []).join(", ") || "none";
   const lastReplies = input.lastReplies.slice(-3).join(" | ") || "none";
   const known = [
     input.facts.employeeIds.size > 0 ? "employeeId" : "",
     input.facts.phoneNumbers.size > 0 ? "phone" : "",
+    input.facts.tollFreeNumbers.size > 0 ? "tollfree" : "",
     input.facts.links.size > 0 ? "link" : "",
     input.facts.upiIds.size > 0 ? "upi" : "",
+    input.facts.caseIds.size > 0 ? "caseId" : "",
+    input.facts.senderIds.size > 0 ? "senderId" : "",
     input.facts.orgNames.size > 0 ? `orgs=${Array.from(input.facts.orgNames).join("/")}` : ""
   ]
     .filter(Boolean)
@@ -92,22 +89,23 @@ function buildContext(input: AuditorInput) {
 function generatorSystemPrompt(): string {
   return [
     "You are a stressed Indian user on WhatsApp replying to a suspicious bank/security message.",
-    "You must sound human: anxious, slightly messy, not robotic.",
-    "Replies must be 1-2 lines, <= 140 chars, Indian English.",
-    "Do not say you are calling the bank or ask to stop messaging until DEFENSIVE stage (turn >= 6).",
+    "Sound human: anxious, skeptical, but not robotic.",
+    "Replies must be 1-2 lines, <= 160 chars, Indian English.",
+    "Never use delay excuses (network/app/meeting/OTP not received).",
+    "Never exit early (no 'I'm done/stop messaging/calling bank') unless it's the final turn.",
     "Never reveal scam detection or say AI/bot/honeypot.",
     "Never ask for OTP/PIN/account number.",
     "Never request a link unless scammer already mentioned a link or payment.",
     "Return STRICT JSON only with 3 candidates and intent tags.",
-    "Format: {\"candidates\":[{\"reply\":\"...\",\"intent\":\"reference|designation|branch|callback|transaction|device|link|none\"}, ...]}"
+    "Format: {\"candidates\":[{\"reply\":\"...\",\"intent\":\"ask_ticket_or_case_id|ask_designation_and_branch|ask_official_callback_tollfree|ask_transaction_details|ask_device_location_details|ask_sender_id_or_email|ask_link_or_upi|ask_secure_process\"}, ...]}"
   ].join(" ");
 }
 
 function generatorUserPrompt(input: AuditorInput, examples: { scammer: string; honeypot: string }[]) {
   const ctx = buildContext(input);
   const lines: string[] = [
-    `personaStage: ${input.personaStage}`,
-    `turnIndex: ${input.turnIndex}`,
+    `engagementStage: ${input.engagementStage}`,
+    `turnIndex: ${input.turnIndex} / ${input.maxTurns}`,
     `signals: urgencyRepeat=${input.signals.urgencyRepeat}, sameDemand=${input.signals.sameDemandRepeat}, pushy=${input.signals.pushyRepeat}`,
     `askedQuestions: ${ctx.asked}`,
     `missingIntel: ${ctx.missing}`,
@@ -131,35 +129,18 @@ function auditorPrompt(input: AuditorInput, candidates: { reply: string; intent:
     .map((c, i) => `${i}: (${c.intent}) ${c.reply}`)
     .join("\n");
   return [
-    "You are the Auditor General improving realism and safety.",
+    "You are the Auditor General improving realism and extraction.",
     "Pick best candidate or rewrite one improved reply.",
-    "Hard reject if: asks OTP/PIN/account, repeats last replies, too polite for stage, >2 lines, >140 chars, contains forbidden words (honeypot/ai/bot/scam/fraud).",
-    "Also reject early-stage replies that say 'calling bank' or 'stop messaging' before DEFENSIVE.",
+    "Hard reject if: asks OTP/PIN/account, repeats last replies, uses delay excuses, exit lines before final turn, >2 lines, >160 chars, forbidden words (honeypot/ai/bot/scam/fraud).",
+    "Rewrite into an extraction question if needed.",
     "Return JSON only: {\"bestIndex\":0|1|2,\"rewrite\":\"...\",\"intent\":\"...\",\"issues\":[...],\"suggestions\":[...]}",
-    `personaStage: ${input.personaStage}`,
+    `engagementStage: ${input.engagementStage}`,
+    `turnIndex: ${input.turnIndex} / ${input.maxTurns}`,
     `askedQuestions: ${ctx.asked}`,
     `missingIntel: ${ctx.missing}`,
     `lastReplies: ${ctx.lastReplies}`,
     `scammerMessage: ${input.lastScammerMessage}`,
     `candidates:\n${list}`
-  ].join("\n");
-}
-
-function revisionPrompt(input: AuditorInput, draft: { reply: string; intent: string }, issues: string[]) {
-  const ctx = buildContext(input);
-  return [
-    "You are revising a WhatsApp reply for realism and safety.",
-    "Reply must be 1-2 lines, <= 140 chars, Indian English.",
-    "Never ask for OTP/PIN/account number. Never mention AI/bot/scam/honeypot.",
-    "Return JSON only: {\"reply\":\"...\",\"intent\":\"reference|designation|branch|callback|transaction|device|link|none\"}",
-    `personaStage: ${input.personaStage}`,
-    `askedQuestions: ${ctx.asked}`,
-    `missingIntel: ${ctx.missing}`,
-    `lastReplies: ${ctx.lastReplies}`,
-    `scammerMessage: ${input.lastScammerMessage}`,
-    `draftReply: ${draft.reply}`,
-    `draftIntent: ${draft.intent}`,
-    `issues: ${issues.join("; ") || "none"}`
   ].join("\n");
 }
 
@@ -212,7 +193,21 @@ async function callOpenAIRevision(
         model,
         input: [
           { role: "system", content: "Return JSON only." },
-          { role: "user", content: revisionPrompt(input, draft, issues) }
+          {
+            role: "user",
+            content: [
+              "Revise the reply to be human, suspicious, and extraction-focused.",
+              "No delay excuses. No exit phrases unless final turn.",
+              "Return JSON only: {\"reply\":\"...\",\"intent\":\"...\"}.",
+              `engagementStage: ${input.engagementStage}`,
+              `turnIndex: ${input.turnIndex} / ${input.maxTurns}`,
+              `lastReplies: ${input.lastReplies.slice(-3).join(" | ") || "none"}`,
+              `scammerMessage: ${input.lastScammerMessage}`,
+              `draftReply: ${draft.reply}`,
+              `draftIntent: ${draft.intent}`,
+              `issues: ${issues.join("; ") || "none"}`
+            ].join("\n")
+          }
         ],
         max_output_tokens: 120,
         temperature: 0.5
@@ -263,28 +258,31 @@ async function callGeminiAudit(
 function normalizeIntent(intent: string): string {
   const lower = intent.toLowerCase();
   if (INTENTS.includes(lower)) return lower;
-  if (lower.includes("reference") || lower.includes("ticket")) return "reference";
-  if (lower.includes("designation") || lower.includes("employee")) return "designation";
-  if (lower.includes("branch") || lower.includes("city")) return "branch";
-  if (lower.includes("callback") || lower.includes("toll")) return "callback";
-  if (lower.includes("transaction") || lower.includes("amount")) return "transaction";
-  if (lower.includes("device") || lower.includes("login")) return "device";
-  if (lower.includes("link")) return "link";
+  if (lower.includes("ticket") || lower.includes("case") || lower.includes("ref")) return "ask_ticket_or_case_id";
+  if (lower.includes("designation") || lower.includes("employee") || lower.includes("branch") || lower.includes("city"))
+    return "ask_designation_and_branch";
+  if (lower.includes("callback") || lower.includes("toll")) return "ask_official_callback_tollfree";
+  if (lower.includes("transaction") || lower.includes("amount") || lower.includes("time")) return "ask_transaction_details";
+  if (lower.includes("device") || lower.includes("login") || lower.includes("location")) return "ask_device_location_details";
+  if (lower.includes("sender") || lower.includes("email") || lower.includes("domain")) return "ask_sender_id_or_email";
+  if (lower.includes("link") || lower.includes("upi")) return "ask_link_or_upi";
+  if (lower.includes("process")) return "ask_secure_process";
   return "none";
 }
 
 function pickBest(
   input: AuditorInput,
   list: { reply: string; intent: string; source: string }[]
-): { reply: string; intent: string; source: string; reason?: string } | null {
+): { reply: string; intent: string; source: string } | null {
   for (const item of list) {
     const intent = normalizeIntent(item.intent);
     const validation = validateReply(item.reply, {
       lastReplies: input.lastReplies,
-      personaStage: input.personaStage,
+      engagementStage: input.engagementStage,
       facts: input.facts,
       lastScammerMessage: input.lastScammerMessage,
-      turnIndex: input.turnIndex
+      turnIndex: input.turnIndex,
+      maxTurns: input.maxTurns
     });
     if (validation.ok) {
       return { reply: item.reply, intent, source: item.source };
@@ -294,30 +292,34 @@ function pickBest(
 }
 
 function nextLadderQuestion(input: AuditorInput): { key: string; question: string } | null {
-  if (input.personaStage === "DEFENSIVE" || input.personaStage === "DONE") return null;
   const asked = input.askedQuestions;
-  const order: Array<{ key: string; question: string; skip?: boolean }> = [
-    { key: "reference", question: "Do you have any reference or ticket number?" },
+  const ladder: Array<{ key: string; question: string; skip?: boolean }> = [
+    { key: "ask_ticket_or_case_id", question: "Do you have a ticket or case ID?" },
+    { key: "ask_designation_and_branch", question: "Give your designation and branch/city." },
+    { key: "ask_official_callback_tollfree", question: "Share the official callback or toll-free number." },
+    { key: "ask_transaction_details", question: "What transaction amount and time is this about?" },
+    { key: "ask_device_location_details", question: "Which device and location was this login from?" },
+    { key: "ask_sender_id_or_email", question: "What is the official SMS sender ID or email domain?" },
     {
-      key: "designation",
-      question: input.extractedIntel.employeeIds.length > 0 ? "What's your designation?" : "What's your employee ID?"
+      key: "ask_link_or_upi",
+      question: "Why are you sending a link or UPI for this?",
+      skip:
+        input.extractedIntel.phishingLinks.length > 0 ||
+        input.extractedIntel.upiIds.length > 0
     },
-    { key: "branch", question: "Which branch or city is this from?" },
-    { key: "callback", question: "Share an official callback or toll-free number." },
-    { key: "transaction", question: "Which transaction or amount is this about?" },
-    { key: "device", question: "Which device or login was flagged?" },
-    {
-      key: "link",
-      question: "Why are you sending a link for this?",
-      skip: !(/link|http|upi|payment|pay/.test(input.lastScammerMessage.toLowerCase()) || input.facts.hasLink)
-    }
+    { key: "ask_secure_process", question: "Explain the official process without OTP." }
   ];
-  for (const item of order) {
+
+  for (const item of ladder) {
     if (item.skip) continue;
+    if (item.key === "ask_link_or_upi") {
+      const hasContext = /link|http|upi|payment|pay/.test(input.lastScammerMessage.toLowerCase()) || input.facts.hasLink || input.facts.hasUpi;
+      if (!hasContext) continue;
+    }
     if (asked.has(item.key)) continue;
     return item;
   }
-  return null;
+  return { key: "ask_secure_process", question: "Explain the official process without OTP." };
 }
 
 function ensureQuestion(
@@ -331,10 +333,11 @@ function ensureQuestion(
   const candidate = `${reply} ${next.question}`;
   const validation = validateReply(candidate, {
     lastReplies: input.lastReplies,
-    personaStage: input.personaStage,
+    engagementStage: input.engagementStage,
     facts: input.facts,
     lastScammerMessage: input.lastScammerMessage,
-    turnIndex: input.turnIndex
+    turnIndex: input.turnIndex,
+    maxTurns: input.maxTurns
   });
   if (validation.ok) return { reply: candidate, intent: next.key };
   return { reply, intent };
@@ -395,7 +398,7 @@ export async function generateReplyAuditorGeneral(input: AuditorInput): Promise<
         openai,
         openaiModel,
         input,
-        { reply: draft.reply, intent: draft.intent },
+        draft,
         geminiAudit.issues,
         Math.min(llmTimeoutMs, timeLeft() - 100)
       );
@@ -413,18 +416,16 @@ export async function generateReplyAuditorGeneral(input: AuditorInput): Promise<
 
   const picked = pickBest(input, ordered);
   if (!picked) {
-    const fallback = fallbackReplyForStage(input.personaStage);
+    const fallback = fallbackReplyForStage(input.engagementStage);
     safeLog(`[AUDITOR] ${input.sessionId} ${JSON.stringify({ used: "fallback", turn: input.turnIndex })}`);
     return { reply: fallback, chosenIntent: "none", notes: "fallback" };
   }
 
   let finalReply = picked.reply;
   let finalIntent = normalizeIntent(picked.intent);
-  if (input.personaStage !== "DEFENSIVE" && input.personaStage !== "DONE") {
-    const ensured = ensureQuestion(input, finalReply, finalIntent);
-    finalReply = ensured.reply;
-    finalIntent = ensured.intent;
-  }
+  const ensured = ensureQuestion(input, finalReply, finalIntent);
+  finalReply = ensured.reply;
+  finalIntent = ensured.intent;
 
   safeLog(
     `[AUDITOR] ${input.sessionId} ${JSON.stringify({ used: picked.source, turn: input.turnIndex })}`

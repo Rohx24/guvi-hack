@@ -13,7 +13,7 @@ export type LogMessageInput = {
 export type LogDecisionInput = {
   sessionId: string;
   turnIndex: number;
-  personaStage: string;
+  stage: string;
   chosenIntent: string;
   reply: string;
 };
@@ -64,7 +64,7 @@ export async function logDecision(input: LogDecisionInput): Promise<void> {
     await sb.from("honeypot_decisions").insert({
       session_id: input.sessionId,
       turn_index: input.turnIndex,
-      persona_stage: input.personaStage,
+      persona_stage: input.stage,
       chosen_intent: input.chosenIntent,
       reply: input.reply
     });
