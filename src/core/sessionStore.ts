@@ -20,6 +20,21 @@ export type SessionMessage = {
 };
 
 export type SessionFacts = {
+  branch?: string;
+  city?: string;
+  employeeId?: string;
+  designation?: string;
+  managerName?: string;
+  callbackNumber?: string;
+  referenceId?: string;
+  txnAmount?: string;
+  txnTime?: string;
+  txnMode?: string;
+  deviceCity?: string;
+  link?: string;
+  upi?: string;
+  accountHint?: string;
+
   employeeIds: Set<string>;
   phoneNumbers: Set<string>;
   links: Set<string>;
@@ -40,17 +55,19 @@ export type SessionMemory = {
   scamDetected: boolean;
   engagementStage: EngagementStage;
   conversationPhase: string;
+  level: number;
+  usedThrowOffs: number;
   engagement: EngagementMetrics;
   story: StorySummary;
   extractedIntelligence: ExtractedIntelligence;
   persona: Persona;
   goalFlags: GoalFlags;
   lastIntents: Intent[];
-  lastReplies: string[];
+  lastReplyTexts: string[];
   agentNotes: string;
   messages: SessionMessage[];
   facts: SessionFacts;
-  askedQuestions: Set<string>;
+  askedSlots: Set<string>;
   runningSummary: string;
   callbackSent: boolean;
   callbackInFlight?: boolean;
@@ -130,6 +147,20 @@ function normalizeFacts(raw: Partial<SessionFacts> | undefined): SessionFacts {
   );
   const senderIds = toSet((raw as { senderIds?: unknown } | undefined)?.senderIds);
   return {
+    branch: raw?.branch,
+    city: raw?.city,
+    employeeId: raw?.employeeId,
+    designation: raw?.designation,
+    managerName: raw?.managerName,
+    callbackNumber: raw?.callbackNumber,
+    referenceId: raw?.referenceId,
+    txnAmount: raw?.txnAmount,
+    txnTime: raw?.txnTime,
+    txnMode: raw?.txnMode,
+    deviceCity: raw?.deviceCity,
+    link: raw?.link,
+    upi: raw?.upi,
+    accountHint: raw?.accountHint,
     employeeIds,
     phoneNumbers,
     links,
@@ -147,6 +178,20 @@ function normalizeFacts(raw: Partial<SessionFacts> | undefined): SessionFacts {
 
 function serializeFacts(facts: SessionFacts): Record<string, unknown> {
   return {
+    branch: facts.branch,
+    city: facts.city,
+    employeeId: facts.employeeId,
+    designation: facts.designation,
+    managerName: facts.managerName,
+    callbackNumber: facts.callbackNumber,
+    referenceId: facts.referenceId,
+    txnAmount: facts.txnAmount,
+    txnTime: facts.txnTime,
+    txnMode: facts.txnMode,
+    deviceCity: facts.deviceCity,
+    link: facts.link,
+    upi: facts.upi,
+    accountHint: facts.accountHint,
     employeeIds: Array.from(facts.employeeIds),
     phoneNumbers: Array.from(facts.phoneNumbers),
     links: Array.from(facts.links),
@@ -162,20 +207,12 @@ function serializeFacts(facts: SessionFacts): Record<string, unknown> {
   };
 }
 
-function normalizeAskedQuestions(raw: unknown): Set<string> {
+function normalizeAskedSlots(raw: unknown): Set<string> {
   if (raw instanceof Set) return raw as Set<string>;
   if (Array.isArray(raw)) {
     return new Set<string>(raw.filter((item) => typeof item === "string") as string[]);
   }
   return new Set<string>();
-}
-
-function mapLegacyStage(stage?: string): EngagementStage {
-  if (stage === "ASSERTIVE") return "ASSERTIVE";
-  if (stage === "SUSPICIOUS") return "SUSPICIOUS";
-  if (stage === "CONFUSED") return "CONFUSED";
-  if (stage === "ANNOYED" || stage === "DEFENSIVE" || stage === "DONE") return "ASSERTIVE";
-  return "CONFUSED";
 }
 
 export class SessionStore {
@@ -197,30 +234,40 @@ export class SessionStore {
     const raw = fs.readFileSync(this.persistFile, "utf-8");
     const parsed = JSON.parse(raw) as SessionMemory[];
     for (const session of parsed) {
-      const legacyStage = (session as unknown as { personaStage?: string }).personaStage;
-      const stage =
-        (session as unknown as { engagementStage?: string }).engagementStage || legacyStage || "CONFUSED";
       const hydrated: SessionMemory = {
         ...session,
         facts: normalizeFacts((session as unknown as { facts?: SessionFacts }).facts),
         messages: Array.isArray((session as unknown as { messages?: SessionMessage[] }).messages)
           ? (session as unknown as { messages: SessionMessage[] }).messages
           : [],
-        askedQuestions: normalizeAskedQuestions(
-          (session as unknown as { askedQuestions?: unknown }).askedQuestions
+        askedSlots: normalizeAskedSlots(
+          (session as unknown as { askedSlots?: unknown }).askedSlots ??
+            (session as unknown as { askedQuestions?: unknown }).askedQuestions
         ),
         runningSummary:
           typeof (session as unknown as { runningSummary?: string }).runningSummary === "string"
             ? (session as unknown as { runningSummary: string }).runningSummary
             : "",
-      engagementStage: mapLegacyStage(stage),
-      conversationPhase:
-        typeof (session as unknown as { conversationPhase?: string }).conversationPhase === "string"
-          ? (session as unknown as { conversationPhase: string }).conversationPhase
-          : "Phase 1",
-      callbackInFlight: Boolean(
-        (session as unknown as { callbackInFlight?: boolean }).callbackInFlight
-      )
+        engagementStage:
+          (session as unknown as { engagementStage?: EngagementStage }).engagementStage || "CONFUSED",
+        conversationPhase:
+          typeof (session as unknown as { conversationPhase?: string }).conversationPhase === "string"
+            ? (session as unknown as { conversationPhase: string }).conversationPhase
+            : "Phase 1",
+        level: typeof (session as unknown as { level?: number }).level === "number" ?
+          (session as unknown as { level: number }).level : 0,
+        usedThrowOffs:
+          typeof (session as unknown as { usedThrowOffs?: number }).usedThrowOffs === "number"
+            ? (session as unknown as { usedThrowOffs: number }).usedThrowOffs
+            : 0,
+        lastReplyTexts: Array.isArray((session as unknown as { lastReplyTexts?: string[] }).lastReplyTexts)
+          ? (session as unknown as { lastReplyTexts: string[] }).lastReplyTexts
+          : Array.isArray((session as unknown as { lastReplies?: string[] }).lastReplies)
+          ? (session as unknown as { lastReplies: string[] }).lastReplies
+          : [],
+        callbackInFlight: Boolean(
+          (session as unknown as { callbackInFlight?: boolean }).callbackInFlight
+        )
       };
       this.sessions.set(session.sessionId, hydrated);
     }
@@ -231,7 +278,8 @@ export class SessionStore {
     const payload = Array.from(this.sessions.values()).map((session) => ({
       ...session,
       facts: serializeFacts(session.facts),
-      askedQuestions: Array.from(session.askedQuestions || [])
+      askedSlots: Array.from(session.askedSlots || []),
+      lastReplyTexts: session.lastReplyTexts
     }));
     fs.writeFileSync(this.persistFile, JSON.stringify(payload, null, 2));
   }
@@ -242,9 +290,11 @@ export class SessionStore {
       if (!existing.persona) existing.persona = createPersona();
       if (!existing.engagementStage) existing.engagementStage = "CONFUSED";
       if (typeof existing.conversationPhase !== "string") existing.conversationPhase = "Phase 1";
+      if (typeof existing.level !== "number") existing.level = 0;
+      if (typeof existing.usedThrowOffs !== "number") existing.usedThrowOffs = 0;
       if (!existing.goalFlags) existing.goalFlags = { ...DEFAULT_GOALS };
       if (!existing.lastIntents) existing.lastIntents = [];
-      if (!existing.lastReplies) existing.lastReplies = [];
+      if (!existing.lastReplyTexts) existing.lastReplyTexts = [];
       if (typeof existing.scamDetected !== "boolean") existing.scamDetected = false;
       if (typeof existing.callbackSent !== "boolean") existing.callbackSent = false;
       if (typeof existing.callbackInFlight !== "boolean") existing.callbackInFlight = false;
@@ -254,7 +304,7 @@ export class SessionStore {
       }
       if (!existing.messages) existing.messages = [];
       existing.facts = normalizeFacts(existing.facts);
-      if (!existing.askedQuestions) existing.askedQuestions = new Set<string>();
+      if (!existing.askedSlots) existing.askedSlots = new Set<string>();
       if (typeof existing.runningSummary !== "string") existing.runningSummary = "";
       this.update(existing);
       return existing;
@@ -266,6 +316,8 @@ export class SessionStore {
       scamDetected: false,
       engagementStage: "CONFUSED",
       conversationPhase: "Phase 1",
+      level: 0,
+      usedThrowOffs: 0,
       engagement: {
         mode: "SAFE",
         totalMessagesExchanged: 0,
@@ -279,11 +331,11 @@ export class SessionStore {
       persona: createPersona(),
       goalFlags: { ...DEFAULT_GOALS },
       lastIntents: [],
-      lastReplies: [],
+      lastReplyTexts: [],
       agentNotes: "",
       messages: [],
       facts: normalizeFacts(DEFAULT_FACTS),
-      askedQuestions: new Set<string>(),
+      askedSlots: new Set<string>(),
       runningSummary: "",
       callbackSent: false,
       callbackInFlight: false
@@ -305,6 +357,8 @@ export class SessionStore {
       scamDetected: false,
       engagementStage: "CONFUSED",
       conversationPhase: "Phase 1",
+      level: 0,
+      usedThrowOffs: 0,
       engagement: {
         mode: "SAFE",
         totalMessagesExchanged: 0,
@@ -317,11 +371,11 @@ export class SessionStore {
       extractedIntelligence: { ...DEFAULT_EXTRACTED },
       goalFlags: { ...DEFAULT_GOALS },
       lastIntents: [],
-      lastReplies: [],
+      lastReplyTexts: [],
       agentNotes: "",
       messages: [],
       facts: normalizeFacts(DEFAULT_FACTS),
-      askedQuestions: new Set<string>(),
+      askedSlots: new Set<string>(),
       runningSummary: "",
       callbackSent: false,
       callbackInFlight: false

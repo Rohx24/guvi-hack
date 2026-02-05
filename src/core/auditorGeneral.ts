@@ -14,7 +14,7 @@ export type AuditorInput = {
   extractedIntel: ExtractedIntelligence;
   facts: SessionFacts;
   engagementStage: EngagementStage;
-  askedQuestions: Set<string>;
+  askedSlots: Set<string>;
   lastReplies: string[];
   turnIndex: number;
   maxTurns: number;
@@ -23,6 +23,7 @@ export type AuditorInput = {
   signals: EngagementSignals;
   scenario?: string;
   channel?: string;
+  level?: number;
 };
 
 export type AuditorOutput = {
@@ -74,7 +75,7 @@ function extractJson(text: string): any | null {
 }
 
 function buildContext(input: AuditorInput) {
-  const asked = Array.from(input.askedQuestions || []).join(", ") || "none";
+  const asked = Array.from(input.askedSlots || []).join(", ") || "none";
   const lastReplies = input.lastReplies.slice(-3).join(" | ") || "none";
   const known = [
     input.facts.employeeIds.size > 0 ? "employeeId" : "",
@@ -89,7 +90,7 @@ function buildContext(input: AuditorInput) {
     .filter(Boolean)
     .join(", ") || "none";
 
-  const missing = INTENTS.filter((i) => i !== "none" && !input.askedQuestions.has(i)).join(", ") ||
+  const missing = INTENTS.filter((i) => i !== "none" && !input.askedSlots.has(i)).join(", ") ||
     "none";
 
   return {
@@ -151,10 +152,11 @@ function generatorSystemPrompt(): string {
 
 function generatorUserPrompt(input: AuditorInput, examples: { scammer: string; honeypot: string }[]) {
   const ctx = buildContext(input);
-  const phase = currentPhaseLabel(input.askedQuestions);
+  const phase = currentPhaseLabel(input.askedSlots);
   const lines: string[] = [
     `engagementStage: ${input.engagementStage}`,
     `phase: ${phase}`,
+    `level: ${input.level ?? 0}`,
     `turnIndex: ${input.turnIndex} / ${input.maxTurns}`,
     `signals: urgencyRepeat=${input.signals.urgencyRepeat}, sameDemand=${input.signals.sameDemandRepeat}, pushy=${input.signals.pushyRepeat}`,
     `askedQuestions: ${ctx.asked}`,
@@ -175,7 +177,7 @@ function generatorUserPrompt(input: AuditorInput, examples: { scammer: string; h
 
 function auditorPrompt(input: AuditorInput, candidates: { reply: string; intent: string }[]): string {
   const ctx = buildContext(input);
-  const phase = currentPhaseLabel(input.askedQuestions);
+  const phase = currentPhaseLabel(input.askedSlots);
   const list = candidates
     .map((c, i) => `${i}: (${c.intent}) ${c.reply}`)
     .join("\n");
@@ -187,6 +189,7 @@ function auditorPrompt(input: AuditorInput, candidates: { reply: string; intent:
     "Return JSON only: {\"bestIndex\":0|1|2,\"rewrite\":\"...\",\"intent\":\"...\",\"issues\":[...],\"suggestions\":[...]}",
     `engagementStage: ${input.engagementStage}`,
     `phase: ${phase}`,
+    `level: ${input.level ?? 0}`,
     `turnIndex: ${input.turnIndex} / ${input.maxTurns}`,
     `askedQuestions: ${ctx.asked}`,
     `missingIntel: ${ctx.missing}`,
@@ -363,17 +366,17 @@ function pickBest(
 }
 
 function nextLadderQuestion(input: AuditorInput): { key: string; question: string } | null {
-  const asked = input.askedQuestions;
+  const asked = input.askedSlots;
   const ladder: Array<{ key: string; question: string; skip?: boolean }> = [
     { key: "ask_ticket_or_case_id", question: "Do you have a ticket or case ID?" },
     { key: "ask_branch_city", question: "Which branch or city is this from?" },
     { key: "ask_department_name", question: "Which department is handling this?" },
     { key: "ask_employee_id", question: "What is your employee ID?" },
     { key: "ask_designation", question: "What is your designation?" },
-    { key: "ask_callback_number", question: "Share the official callback or toll-free number." },
-    { key: "ask_escalation_authority", question: "Who is the escalation authority for this?" },
+    { key: "ask_callback_number", question: "What's the official callback or toll-free number?" },
+    { key: "ask_escalation_authority", question: "Who is the escalation authority or manager here?" },
     { key: "ask_transaction_amount_time", question: "What transaction amount and time is this about?" },
-    { key: "ask_transaction_mode", question: "Which mode was used — UPI, IMPS, or netbanking?" },
+    { key: "ask_transaction_mode", question: "Which mode was used - UPI, IMPS, or netbanking?" },
     { key: "ask_merchant_receiver", question: "Who is the merchant or receiver name?" },
     { key: "ask_device_type", question: "Which device type was used?" },
     { key: "ask_login_location", question: "Which city/location was this login from?" },
@@ -382,13 +385,13 @@ function nextLadderQuestion(input: AuditorInput): { key: string; question: strin
     { key: "ask_no_notification_reason", question: "Why didn't the app show any alert?" },
     { key: "ask_internal_system", question: "Which internal system flagged this?" },
     { key: "ask_phone_numbers", question: "Which official number are you calling from?" },
-    { key: "ask_sender_id_or_email", question: "What is the official SMS sender ID or email domain?" },
+    { key: "ask_sender_id_or_email", question: "What's the official SMS sender ID or email domain?" },
     {
       key: "ask_links",
-      question: "Why are you sending a link for this?",
+      question: "Why is a link needed for this?",
       skip: input.extractedIntel.phishingLinks.length > 0
     },
-    { key: "ask_upi_or_beneficiary", question: "Give the UPI ID or beneficiary name." },
+    { key: "ask_upi_or_beneficiary", question: "What's the UPI ID or beneficiary name?" },
     { key: "ask_names_used", question: "What name was used in your system?" },
     { key: "ask_keywords_used", question: "Which keywords or alerts were triggered?" }
   ];
@@ -402,7 +405,7 @@ function nextLadderQuestion(input: AuditorInput): { key: string; question: strin
     if (asked.has(item.key)) continue;
     return item;
   }
-  return { key: "ask_secure_process", question: "Explain the official process without OTP." };
+  return null;
 }
 
 function ensureQuestion(

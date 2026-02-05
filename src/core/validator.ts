@@ -1,5 +1,6 @@
 import type { EngagementStage } from "./planner";
 import type { SessionFacts } from "./sessionStore";
+import { analyzeAntiBot } from "./antiBot";
 
 const FORBIDDEN_WORDS = [
   "honeypot",
@@ -121,15 +122,20 @@ export function validateReply(reply: string, ctx: ValidationContext): Validation
 
   if (hasExitPhrase(reply)) return { ok: false, reason: "exit_phrase" };
 
+  const antiBot = analyzeAntiBot(reply, ctx.lastReplies);
+  if (!antiBot.ok) {
+    return { ok: false, reason: antiBot.reasons[0] || "anti_bot" };
+  }
+
   return { ok: true };
 }
 
 export function fallbackReplyForStage(stage: EngagementStage): string {
   switch (stage) {
     case "SUSPICIOUS":
-      return "You already said that. Give ticket number and your designation.";
+      return "You already said that. What's the ticket number and your designation?";
     case "ASSERTIVE":
-      return "Be clear: official callback number and branch/city.";
+      return "What's the official callback number and branch/city?";
     case "CONFUSED":
     default:
       return "Why am I getting this suddenly? Do you have a reference number?";

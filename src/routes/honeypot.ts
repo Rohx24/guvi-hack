@@ -3,12 +3,13 @@ import { extractIntelligence, mergeIntelligence, normalizeText } from "../core/e
 import { computeScores } from "../core/scoring";
 import { advanceEngagementStage, detectEngagementSignals, planNext, Intent } from "../core/planner";
 import { isReplySafe, writeReply, writeReplySmart } from "../core/writer";
-import { SessionMessage, SessionStore } from "../core/sessionStore";
+import { SessionMessage, SessionMemory, SessionStore } from "../core/sessionStore";
 import { sendFinalCallback } from "../core/callback";
 import { summarize } from "../core/summarizer";
 import { generateReplyOpenAI } from "../core/openaiWriter";
 import { generateReplyAuditorGeneral } from "../core/auditorGeneral";
 import { logDecision, logMessage } from "../core/supabase";
+import { computeNextLevel } from "../core/levels";
 import {
   maskDigits,
   safeLog,
@@ -81,6 +82,27 @@ function computePhase(asked: Set<string>): string {
     if (pending) return phase.label;
   }
   return "Phase 6";
+}
+
+function maybeAddThrowOff(
+  reply: string,
+  session: SessionMemory,
+  chosenSlot: string
+): { reply: string; used: boolean } {
+  if (session.usedThrowOffs >= 2) return { reply, used: false };
+  if (reply.includes("\n")) return { reply, used: false };
+  if (chosenSlot !== "ask_ticket_or_case_id" && chosenSlot !== "ask_transaction_amount_time") {
+    return { reply, used: false };
+  }
+  const throwOffs = [
+    "I don't recall any transfer above 50k. What amount are you seeing?",
+    "This is a joint account - what's the case or ticket ID?"
+  ];
+  const prefix = throwOffs[session.usedThrowOffs];
+  if (!prefix) return { reply, used: false };
+  const candidate = `${prefix}\n${reply}`;
+  if (candidate.length > 160) return { reply, used: false };
+  return { reply: candidate, used: true };
 }
 
 
@@ -217,6 +239,32 @@ const handleHoneypot = async (req: Request, res: Response) => {
       ...engagementSignals,
       turnCount
     });
+
+    const allSlots = [
+      "ask_ticket_or_case_id",
+      "ask_branch_city",
+      "ask_department_name",
+      "ask_employee_id",
+      "ask_designation",
+      "ask_callback_number",
+      "ask_escalation_authority",
+      "ask_transaction_amount_time",
+      "ask_transaction_mode",
+      "ask_merchant_receiver",
+      "ask_device_type",
+      "ask_login_location",
+      "ask_ip_or_reason",
+      "ask_otp_reason",
+      "ask_no_notification_reason",
+      "ask_internal_system",
+      "ask_phone_numbers",
+      "ask_sender_id_or_email",
+      "ask_links",
+      "ask_upi_or_beneficiary",
+      "ask_names_used",
+      "ask_keywords_used"
+    ];
+    const missingSlots = allSlots.filter((slot) => !session.askedSlots.has(slot)).length;
     const extracted = extractIntelligence(texts);
     const extractedCurrent = extractIntelligence([messageText]);
     const merged = mergeIntelligence(session.extractedIntelligence, extracted);
@@ -251,13 +299,22 @@ const handleHoneypot = async (req: Request, res: Response) => {
       gotExplicitOtpAsk
     };
 
+    const beforeSizes = {
+      employeeIds: session.facts.employeeIds.size,
+      phones: session.facts.phoneNumbers.size,
+      links: session.facts.links.size,
+      upi: session.facts.upiIds.size,
+      caseIds: session.facts.caseIds.size,
+      tolls: session.facts.tollFreeNumbers.size,
+      senderIds: session.facts.senderIds.size
+    };
+
     for (const id of extractedCurrent.employeeIds) session.facts.employeeIds.add(id);
     for (const phone of extractedCurrent.phoneNumbers) session.facts.phoneNumbers.add(phone);
     for (const link of extractedCurrent.phishingLinks) session.facts.links.add(link);
     for (const upi of extractedCurrent.upiIds) session.facts.upiIds.add(upi);
     for (const caseId of extractedCurrent.caseIds) session.facts.caseIds.add(caseId);
-    for (const toll of extractedCurrent.tollFreeNumbers)
-      session.facts.tollFreeNumbers.add(toll);
+    for (const toll of extractedCurrent.tollFreeNumbers) session.facts.tollFreeNumbers.add(toll);
     for (const senderId of extractedCurrent.senderIds) session.facts.senderIds.add(senderId);
     if (/\bsbi\b/.test(normalized)) session.facts.orgNames.add("sbi");
     if (/\bhdfc\b/.test(normalized)) session.facts.orgNames.add("hdfc");
@@ -274,15 +331,48 @@ const handleHoneypot = async (req: Request, res: Response) => {
     session.facts.hasPhone = session.facts.phoneNumbers.size > 0;
     session.facts.hasLink = session.facts.links.size > 0;
     session.facts.hasUpi = session.facts.upiIds.size > 0;
-    if (session.facts.caseIds.size > 0) session.askedQuestions.add("ask_ticket_or_case_id");
-    if (session.facts.employeeIds.size > 0) session.askedQuestions.add("ask_employee_id");
+    if (session.facts.caseIds.size > 0) session.askedSlots.add("ask_ticket_or_case_id");
+    if (session.facts.employeeIds.size > 0) session.askedSlots.add("ask_employee_id");
     if (session.facts.tollFreeNumbers.size > 0 || session.facts.hasPhone) {
-      session.askedQuestions.add("ask_callback_number");
-      session.askedQuestions.add("ask_phone_numbers");
+      session.askedSlots.add("ask_callback_number");
+      session.askedSlots.add("ask_phone_numbers");
     }
-    if (session.facts.senderIds.size > 0) session.askedQuestions.add("ask_sender_id_or_email");
-    if (session.facts.hasLink) session.askedQuestions.add("ask_links");
-    if (session.facts.hasUpi) session.askedQuestions.add("ask_upi_or_beneficiary");
+    if (session.facts.senderIds.size > 0) session.askedSlots.add("ask_sender_id_or_email");
+    if (session.facts.hasLink) session.askedSlots.add("ask_links");
+    if (session.facts.hasUpi) session.askedSlots.add("ask_upi_or_beneficiary");
+
+    if (!session.facts.employeeId && extractedCurrent.employeeIds.length > 0) {
+      session.facts.employeeId = extractedCurrent.employeeIds[0];
+    }
+    if (!session.facts.referenceId && extractedCurrent.caseIds.length > 0) {
+      session.facts.referenceId = extractedCurrent.caseIds[0];
+    }
+    if (!session.facts.callbackNumber && extractedCurrent.phoneNumbers.length > 0) {
+      session.facts.callbackNumber = extractedCurrent.phoneNumbers[0];
+    }
+    if (!session.facts.link && extractedCurrent.phishingLinks.length > 0) {
+      session.facts.link = extractedCurrent.phishingLinks[0];
+    }
+    if (!session.facts.upi && extractedCurrent.upiIds.length > 0) {
+      session.facts.upi = extractedCurrent.upiIds[0];
+    }
+
+    const newIntel =
+      session.facts.employeeIds.size > beforeSizes.employeeIds ||
+      session.facts.phoneNumbers.size > beforeSizes.phones ||
+      session.facts.links.size > beforeSizes.links ||
+      session.facts.upiIds.size > beforeSizes.upi ||
+      session.facts.caseIds.size > beforeSizes.caseIds ||
+      session.facts.tollFreeNumbers.size > beforeSizes.tolls ||
+      session.facts.senderIds.size > beforeSizes.senderIds;
+
+    session.level = computeNextLevel({
+      currentLevel: session.level || 0,
+      scamScore: scores.scamScore,
+      signals: engagementSignals,
+      newIntel,
+      missingSlots
+    });
 
     const summaryBits: string[] = [];
     if (scamDetected) summaryBits.push("Scammer likely fraud");
@@ -304,7 +394,7 @@ const handleHoneypot = async (req: Request, res: Response) => {
       state: session.state,
       engagement: { totalMessagesExchanged: session.engagement.totalMessagesExchanged },
       extracted: merged,
-      askedQuestions: session.askedQuestions,
+      askedQuestions: session.askedSlots,
       lastIntents: session.lastIntents
     });
 
@@ -314,18 +404,19 @@ const handleHoneypot = async (req: Request, res: Response) => {
     let councilNotes = "";
     let chosenIntent = "none";
     const writerInput = {
-      nextIntent: planner.nextIntent,
+      nextSlot: planner.nextSlot,
       state: planner.updatedState,
       stressScore: scores.stressScore,
       lastScammerMessage: messageText,
       story: session.story,
-      lastReplies: session.lastReplies,
+      lastReplies: session.lastReplyTexts,
       turnNumber: session.engagement.totalMessagesExchanged + 1,
       extracted: merged,
       facts: session.facts,
       engagementStage: session.engagementStage,
-      askedQuestions: session.askedQuestions,
-      maxTurns
+      askedQuestions: session.askedSlots,
+      maxTurns,
+      level: session.level
     };
     const councilEnabled = process.env.COUNCIL_MODE !== "false";
     if (councilEnabled) {
@@ -336,25 +427,27 @@ const handleHoneypot = async (req: Request, res: Response) => {
         extractedIntel: merged,
         facts: session.facts,
         engagementStage: session.engagementStage || "CONFUSED",
-        askedQuestions: session.askedQuestions || new Set<string>(),
-        lastReplies: session.lastReplies,
+        askedSlots: session.askedSlots || new Set<string>(),
+        lastReplies: session.lastReplyTexts,
         turnIndex: session.engagement.totalMessagesExchanged + 1,
         maxTurns,
         scamScore: scores.scamScore,
         stressScore: scores.stressScore,
         signals: engagementSignals,
         scenario: bodyTyped.metadata?.channel || "default",
-        channel: bodyTyped.metadata?.channel
+        channel: bodyTyped.metadata?.channel,
+        level: session.level
       });
       reply = audit.reply;
-      chosenIntent = audit.chosenIntent || "none";
+      chosenIntent = audit.chosenIntent || planner.nextSlot;
       councilNotes = audit.notes || "";
     } else {
       reply = await writeReplySmart(writerInput, session.persona, summary, generateReplyOpenAI);
+      chosenIntent = planner.nextSlot;
     }
     if (
       !isReplySafe(reply, {
-        lastReplies: session.lastReplies,
+        lastReplies: session.lastReplyTexts,
         engagementStage: session.engagementStage || "CONFUSED",
         lastScammerMessage: messageText,
         facts: session.facts,
@@ -364,7 +457,22 @@ const handleHoneypot = async (req: Request, res: Response) => {
     ) {
       reply = writeReply(writerInput);
       councilNotes = councilNotes ? `${councilNotes}, fallback=writer` : "fallback=writer";
-      chosenIntent = chosenIntent || "none";
+      chosenIntent = chosenIntent || planner.nextSlot;
+    }
+    const throwOffCandidate = maybeAddThrowOff(reply, session, chosenIntent || planner.nextSlot);
+    if (
+      throwOffCandidate.used &&
+      isReplySafe(throwOffCandidate.reply, {
+        lastReplies: session.lastReplyTexts,
+        engagementStage: session.engagementStage || "CONFUSED",
+        lastScammerMessage: messageText,
+        facts: session.facts,
+        turnIndex: session.engagement.totalMessagesExchanged + 1,
+        maxTurns
+      })
+    ) {
+      reply = throwOffCandidate.reply;
+      session.usedThrowOffs += 1;
     }
     if (!reply || reply.trim().length === 0) {
       reply = "OK";
@@ -376,9 +484,9 @@ const handleHoneypot = async (req: Request, res: Response) => {
       session.messages = session.messages.slice(-30);
     }
     if (chosenIntent && chosenIntent !== "none") {
-      session.askedQuestions.add(chosenIntent);
+      session.askedSlots.add(chosenIntent);
     }
-    session.conversationPhase = computePhase(session.askedQuestions);
+    session.conversationPhase = computePhase(session.askedSlots);
     void logMessage({
       sessionId: session.sessionId,
       turnIndex: turnCount,
@@ -392,7 +500,7 @@ const handleHoneypot = async (req: Request, res: Response) => {
       sessionId: session.sessionId,
       turnIndex: turnCount,
       stage: session.engagementStage || "CONFUSED",
-      chosenIntent: chosenIntent || planner.nextIntent,
+      chosenIntent: chosenIntent || planner.nextSlot,
       reply
     });
 
@@ -410,12 +518,12 @@ const handleHoneypot = async (req: Request, res: Response) => {
     session.engagement.lastMessageAt = now;
     const baseNotes = `mode=${finalMode}, scamScore=${scores.scamScore.toFixed(
       2
-    )}, stressScore=${scores.stressScore.toFixed(2)}, intent=${planner.nextIntent}`;
+    )}, stressScore=${scores.stressScore.toFixed(2)}, intent=${planner.nextSlot}`;
     session.agentNotes = councilNotes ? `${baseNotes}, ${councilNotes}` : baseNotes;
     const intentToStore: Intent =
-      chosenIntent && chosenIntent !== "none" ? (chosenIntent as Intent) : planner.nextIntent;
+      chosenIntent && chosenIntent !== "none" ? (chosenIntent as Intent) : planner.nextSlot;
     session.lastIntents = [...session.lastIntents, intentToStore].slice(-6);
-    session.lastReplies = [...session.lastReplies, reply].slice(-5);
+    session.lastReplyTexts = [...session.lastReplyTexts, reply].slice(-5);
     safeLog(
       `[TURN] ${safeStringify(
         {
@@ -485,7 +593,7 @@ const handleHoneypot = async (req: Request, res: Response) => {
     const totalMessagesExchanged = text ? historyLen + 1 : historyLen;
     const responseJson = turnResponse(
       fallbackScamDetected
-        ? "Why OTP on chat? Give me the ticket number."
+        ? "Why OTP on chat? What's the ticket number?"
         : "This is confusing. Do you have a reference number?"
     );
     logOutgoing(200, responseJson);

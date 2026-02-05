@@ -64,7 +64,7 @@ export type PlannerInput = {
 };
 
 export type PlannerOutput = {
-  nextIntent: Intent;
+  nextSlot: Intent;
   mode: SessionMode;
   updatedState: SessionState;
   scamDetected: boolean;
@@ -173,9 +173,13 @@ function pickNextIntent(input: PlannerInput): Intent {
   ];
 
   for (const intent of ladder) {
+    if (intent === "ask_ticket_or_case_id" && extracted.caseIds.length > 0) continue;
     if (intent === "ask_links" && extracted.phishingLinks.length > 0) continue;
     if (intent === "ask_upi_or_beneficiary" && extracted.upiIds.length > 0) continue;
-    if (intent === "ask_phone_numbers" && extracted.phoneNumbers.length > 0) continue;
+    if (intent === "ask_phone_numbers" && (extracted.phoneNumbers.length > 0 || extracted.tollFreeNumbers.length > 0)) continue;
+    if (intent === "ask_callback_number" && (extracted.phoneNumbers.length > 0 || extracted.tollFreeNumbers.length > 0)) continue;
+    if (intent === "ask_employee_id" && extracted.employeeIds.length > 0) continue;
+    if (intent === "ask_sender_id_or_email" && extracted.senderIds.length > 0) continue;
     if (asked.has(intent)) continue;
     if (intentRepeated(intent, input.lastIntents)) continue;
     return intent;
@@ -197,13 +201,13 @@ export function planNext(input: PlannerInput): PlannerOutput {
     compliance: clamp01(state.compliance + (stressScore > 0.6 ? 0.01 : 0.005))
   };
 
-  const nextIntent = pickNextIntent(input);
+  const nextSlot = pickNextIntent(input);
 
   const agentNotes = `mode=${mode}, scamScore=${scamScore.toFixed(
     2
-  )}, stressScore=${stressScore.toFixed(2)}, intent=${nextIntent}, turns=${
+  )}, stressScore=${stressScore.toFixed(2)}, slot=${nextSlot}, turns=${
     engagement.totalMessagesExchanged
   }`;
 
-  return { nextIntent, mode, updatedState, scamDetected, agentNotes };
+  return { nextSlot, mode, updatedState, scamDetected, agentNotes };
 }

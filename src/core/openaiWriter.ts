@@ -16,21 +16,21 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
 function buildSystemPrompt(): string {
   return [
     "You are a stressed Indian user replying to a suspicious bank/security message.",
-    "Follow the given nextIntent exactly. Only phrase the reply; do not choose strategy.",
+    "Follow the given nextSlot exactly. Only phrase the reply; do not choose strategy.",
     "Reply in 1-2 short lines. Natural Indian texting, slightly imperfect but not cringe.",
     "Over-polished language is undesirable; emotional drift over turns is expected.",
     "Never mention scam, fraud, honeypot, AI, or detection.",
     "Never ask for OTP/PIN/account number and never request delay excuses (network/app/meeting).",
     "Avoid exit phrases (I'm done/stop messaging/calling bank).",
     "If stressScore is high, include one emotional cue like 'I'm worried'.",
-    "Make the reply a smart extraction question tied to nextIntent.",
+    "Make the reply a smart extraction question tied to nextSlot.",
     "Output ONLY the reply text. No quotes, no JSON, no explanations."
   ].join(" ");
 }
 
 function buildUserPrompt(input: WriterInput, persona: Persona, summary: string): string {
   return [
-    `nextIntent: ${input.nextIntent}`,
+    `nextSlot: ${input.nextSlot}`,
     `turnNumber: ${input.turnNumber}`,
     `stressScore: ${input.stressScore.toFixed(2)}`,
     `state: anxiety=${input.state.anxiety.toFixed(2)}, confusion=${input.state.confusion.toFixed(2)}, overwhelm=${input.state.overwhelm.toFixed(2)}, trust=${input.state.trustAuthority.toFixed(2)}, compliance=${input.state.compliance.toFixed(2)}`,

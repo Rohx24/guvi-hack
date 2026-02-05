@@ -15,17 +15,22 @@ async function run() {
   const messages = [
     {
       sender: "scammer",
-      text: "Your KYC is pending. Urgent verify now or account will be blocked. Share OTP.",
+      text: "Your SBI account is blocked. Urgent verify now. Share OTP.",
       timestamp: new Date().toISOString()
     },
     {
       sender: "scammer",
-      text: "Send to UPI: secure@ybl or click https://secure-verify.example.com",
+      text: "This is SBI fraud team, Mumbai branch. Ref ID REF1234.",
       timestamp: new Date().toISOString()
     },
     {
       sender: "scammer",
-      text: "Also call +91 9876543210 if issue.",
+      text: "No time. OTP needed now. Also Delhi branch will close your account.",
+      timestamp: new Date().toISOString()
+    },
+    {
+      sender: "scammer",
+      text: "Click https://sbi-verify.example.com to secure it.",
       timestamp: new Date().toISOString()
     }
   ];
@@ -46,9 +51,8 @@ async function run() {
     });
 
     const payload = await response.json();
+    console.log("Status:", payload.status);
     console.log("Reply:", payload.reply);
-    console.log("Extracted:", payload.extractedIntelligence);
-    console.log("Mode:", payload.engagement.mode, "Score:", payload.scamScore);
   }
 }
 
