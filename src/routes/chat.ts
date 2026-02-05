@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import { analyzeMessage } from "../core/analyst";
 import { chooseGoal } from "../core/strategist";
-import { generateReply } from "../core/actor";
+import { generateAgentReply } from "../core/agent";
 import { SessionStore } from "../core/sessionStore";
 import { LlmExtraction } from "../utils/types";
 import { safeLog } from "../utils/logging";
@@ -67,10 +67,11 @@ router.post("/chat", async (req: Request, res: Response) => {
   const strategist = chooseGoal({
     scamScore: analyst.scamScore,
     extracted: analyst.extracted,
-    burned
+    burned,
+    lastScammerMessage: text
   });
 
-  const reply = await generateReply(strategist.goal, text, 1200);
+  const reply = await generateAgentReply(strategist.goal, text, strategist.panicPrefix, 1200);
   safeLog(
     `[CHAT] ${JSON.stringify({
       sessionId,

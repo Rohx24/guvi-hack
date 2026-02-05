@@ -16,9 +16,11 @@ export type StrategistInput = {
   scamScore: number;
   extracted: LlmExtraction;
   burned: Set<string>;
+  lastScammerMessage: string;
 };
 
 export type StrategistOutput = {
   goal: string;
   reason: string;
+  panicPrefix: string;
 };
