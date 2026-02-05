@@ -414,39 +414,6 @@ function auditorPrompt(input: AuditorInput, candidates: { reply: string; intent:
   ].join("\n");
 }
 
-async function callOpenAIGenerator(
-  client: OpenAI,
-  model: string,
-  input: AuditorInput,
-  examples: { scammer: string; honeypot: string }[],
-  timeoutMs: number
-): Promise<{ reply: string; intent: string }[]> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await client.responses.create(
-      {
-        model,
-        input: [
-          { role: "system", content: generatorSystemPrompt() },
-          { role: "user", content: generatorUserPrompt(input, examples) }
-        ],
-        max_output_tokens: 240,
-        temperature: 0.7
-      },
-      { signal: controller.signal }
-    );
-    const text = response.output_text?.trim() || "";
-    const parsed = extractJson(text);
-    const candidates = Array.isArray(parsed?.candidates) ? parsed.candidates : [];
-    return candidates
-      .map((c: any) => ({ reply: String(c?.reply || "").trim(), intent: String(c?.intent || "none") }))
-      .filter((c: { reply: string; intent: string }) => c.reply.length > 0);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 async function callOpenAIRevision(
   client: OpenAI,
   model: string,
@@ -495,23 +462,56 @@ async function callOpenAIRevision(
   }
 }
 
-async function callGeminiAudit(
+async function callGeminiGenerator(
   input: AuditorInput,
-  candidates: { reply: string; intent: string }[],
   timeoutMs: number
-): Promise<{ approved: boolean; bestReply: string; bestIntent: string; edits: string[]; reasons: string[]; rejectFlags: string[] } | null> {
+): Promise<{ reply: string; intent: string }[]> {
   const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "";
-  if (!apiKey) return null;
+  if (!apiKey) return [];
   const modelName = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
   const client = new GoogleGenerativeAI(apiKey);
   const model = client.getGenerativeModel({ model: modelName });
-  const prompt = auditorPrompt(input, candidates);
+  const prompt = [generatorSystemPrompt(), "", generatorUserPrompt(input, [])].join("\n");
   const timeout = new Promise<never>((_, reject) =>
     setTimeout(() => reject(new Error("Gemini timeout")), timeoutMs)
   );
   try {
     const result = await Promise.race([model.generateContent(prompt), timeout]);
     const text = result.response.text();
+    const parsed = extractJson(text);
+    if (!parsed) return [];
+    const candidates = Array.isArray(parsed?.candidates) ? parsed.candidates : [];
+    return candidates
+      .map((c: any) => ({ reply: String(c?.reply || "").trim(), intent: String(c?.intent || "none") }))
+      .filter((c: { reply: string; intent: string }) => c.reply.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+async function callOpenAIAudit(
+  client: OpenAI,
+  model: string,
+  input: AuditorInput,
+  candidates: { reply: string; intent: string }[],
+  timeoutMs: number
+): Promise<{ approved: boolean; bestReply: string; bestIntent: string; edits: string[]; reasons: string[]; rejectFlags: string[] } | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await client.responses.create(
+      {
+        model,
+        input: [
+          { role: "system", content: "Return JSON only." },
+          { role: "user", content: auditorPrompt(input, candidates) }
+        ],
+        max_output_tokens: 220,
+        temperature: 0.4
+      },
+      { signal: controller.signal }
+    );
+    const text = response.output_text?.trim() || "";
     const parsed = extractJson(text);
     if (!parsed) return null;
     return {
@@ -522,6 +522,40 @@ async function callGeminiAudit(
       reasons: Array.isArray(parsed.reasons) ? parsed.reasons : [],
       rejectFlags: Array.isArray(parsed.rejectFlags) ? parsed.rejectFlags : []
     };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function callGeminiFinal(
+  input: AuditorInput,
+  draft: { reply: string; intent: string },
+  timeoutMs: number
+): Promise<{ reply: string; intent: string } | null> {
+  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "";
+  if (!apiKey) return null;
+  const modelName = process.env.GEMINI_MODEL || DEFAULT_GEMINI_MODEL;
+  const client = new GoogleGenerativeAI(apiKey);
+  const model = client.getGenerativeModel({ model: modelName });
+  const prompt = [
+    "Polish the reply to be calm, firm, non-confrontational, 1-2 lines, <=160 chars.",
+    "No banned phrases. No OTP/PIN/account ask. Keep same intent.",
+    "Return JSON only: {\"reply\":\"...\",\"intent\":\"...\"}.",
+    `reply: ${draft.reply}`,
+    `intent: ${draft.intent}`,
+    `scammerMessage: ${input.lastScammerMessage}`
+  ].join("\n");
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("Gemini final timeout")), timeoutMs)
+  );
+  try {
+    const result = await Promise.race([model.generateContent(prompt), timeout]);
+    const text = result.response.text();
+    const parsed = extractJson(text);
+    const reply = typeof parsed?.reply === "string" ? parsed.reply : "";
+    const intent = typeof parsed?.intent === "string" ? parsed.intent : "none";
+    if (!reply) return null;
+    return { reply, intent };
   } catch {
     return null;
   }
@@ -680,22 +714,21 @@ export async function generateReplyAuditorGeneral(input: AuditorInput): Promise<
   }
 
   let candidates: { reply: string; intent: string }[] = [];
-  if (openai && timeLeft() > 400) {
+  if (timeLeft() > 400) {
     const timeout = Math.min(llmTimeoutMs, Math.max(400, timeLeft() - 100));
-    try {
-      candidates = await callOpenAIGenerator(openai, openaiModel, input, examples, timeout);
-    } catch {
-      candidates = [];
-    }
+    candidates = await callGeminiGenerator(input, timeout);
   }
 
-  const geminiAudit = timeLeft() > 400 ? await callGeminiAudit(input, candidates, Math.min(llmTimeoutMs, timeLeft() - 100)) : null;
+  const gptAudit =
+    openai && timeLeft() > 400
+      ? await callOpenAIAudit(openai, openaiModel, input, candidates, Math.min(llmTimeoutMs, timeLeft() - 100))
+      : null;
 
   let revision: { reply: string; intent: string } | null = null;
-  if (enableRevision && openai && geminiAudit && timeLeft() > 600) {
+  if (enableRevision && openai && gptAudit && timeLeft() > 600) {
     const draft = {
-      reply: geminiAudit.bestReply || "",
-      intent: geminiAudit.bestIntent || "none"
+      reply: gptAudit.bestReply || "",
+      intent: gptAudit.bestIntent || "none"
     };
     if (draft.reply) {
       revision = await callOpenAIRevision(
@@ -703,7 +736,7 @@ export async function generateReplyAuditorGeneral(input: AuditorInput): Promise<
         openaiModel,
         input,
         draft,
-        geminiAudit.reasons,
+        gptAudit.reasons,
         Math.min(llmTimeoutMs, timeLeft() - 100)
       );
     }
@@ -711,8 +744,8 @@ export async function generateReplyAuditorGeneral(input: AuditorInput): Promise<
 
   const ordered: { reply: string; intent: string; source: string }[] = [];
   if (revision?.reply) ordered.push({ reply: revision.reply, intent: revision.intent, source: "gpt_revision" });
-  if (geminiAudit?.bestReply) ordered.push({ reply: geminiAudit.bestReply, intent: geminiAudit.bestIntent, source: "gemini_best" });
-  candidates.forEach((c) => ordered.push({ reply: c.reply, intent: c.intent, source: "gpt_candidate" }));
+  if (gptAudit?.bestReply) ordered.push({ reply: gptAudit.bestReply, intent: gptAudit.bestIntent, source: "gpt_best" });
+  candidates.forEach((c) => ordered.push({ reply: c.reply, intent: c.intent, source: "gemini_candidate" }));
 
   const picked = pickBest(input, ordered);
   if (!picked) {
@@ -727,9 +760,17 @@ export async function generateReplyAuditorGeneral(input: AuditorInput): Promise<
   finalReply = ensured.reply;
   finalIntent = ensured.intent;
 
+  let finalSource = picked.source;
+  const geminiFinal = timeLeft() > 300 ? await callGeminiFinal(input, { reply: finalReply, intent: finalIntent }, Math.min(llmTimeoutMs, timeLeft() - 50)) : null;
+  if (geminiFinal?.reply) {
+    finalReply = geminiFinal.reply;
+    finalIntent = geminiFinal.intent || finalIntent;
+    finalSource = "gemini_final";
+  }
+
   safeLog(
-    `[AUDITOR] ${input.sessionId} ${JSON.stringify({ used: picked.source, turn: input.turnIndex })}`
+    `[AUDITOR] ${input.sessionId} ${JSON.stringify({ used: finalSource, turn: input.turnIndex })}`
   );
 
-  return { reply: finalReply, chosenIntent: finalIntent, notes: picked.source };
+  return { reply: finalReply, chosenIntent: finalIntent, notes: finalSource };
 }
