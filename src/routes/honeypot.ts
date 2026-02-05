@@ -3,7 +3,7 @@ import { extractIntelligence, mergeIntelligence, normalizeText } from "../core/e
 import { computeScores } from "../core/scoring";
 import { planNext } from "../core/planner";
 import { writeReplySmart } from "../core/writer";
-import { SessionStore } from "../core/sessionStore";
+import { SessionMessage, SessionStore } from "../core/sessionStore";
 import { sendFinalCallback } from "../core/callback";
 import { summarize } from "../core/summarizer";
 import { generateReplyOpenAI } from "../core/openaiWriter";
@@ -131,6 +131,20 @@ router.post("/honeypot", async (req: Request, res: Response) => {
       }
     }
 
+    if (session.messages.length === 0 && conversationHistory.length > 0) {
+      const seedMessages: SessionMessage[] = conversationHistory.map((m) => ({
+        sender: m.sender === "scammer" ? "scammer" : "honeypot",
+        text: m.text,
+        timestamp: m.timestamp || nowIso
+      }));
+      session.messages = seedMessages.slice(-30);
+    }
+
+    session.messages.push({ sender: "scammer", text: messageText, timestamp: messageTimestamp });
+    if (session.messages.length > 30) {
+      session.messages = session.messages.slice(-30);
+    }
+
     const historyTexts = conversationHistory.map((m) => m.text);
     const texts = [messageText, ...historyTexts];
 
@@ -141,6 +155,7 @@ router.post("/honeypot", async (req: Request, res: Response) => {
 
     const normalized = normalizeText(messageText);
     const extracted = extractIntelligence(texts);
+    const extractedCurrent = extractIntelligence([messageText]);
     const merged = mergeIntelligence(session.extractedIntelligence, extracted);
 
     const scores = computeScores(normalized, session.state);
@@ -173,6 +188,26 @@ router.post("/honeypot", async (req: Request, res: Response) => {
       gotExplicitOtpAsk
     };
 
+    for (const id of extractedCurrent.employeeIds) session.facts.employeeIds.add(id);
+    for (const phone of extractedCurrent.phoneNumbers) session.facts.phones.add(phone);
+    for (const link of extractedCurrent.phishingLinks) session.facts.links.add(link);
+    session.facts.hasEmployeeId = session.facts.employeeIds.size > 0;
+    session.facts.hasPhone = session.facts.phones.size > 0;
+    session.facts.hasLink = session.facts.links.size > 0;
+
+    const summaryBits: string[] = [];
+    if (scamDetected) summaryBits.push("Scammer likely fraud");
+    if (merged.phishingLinks.length > 0) summaryBits.push("sent link");
+    if (normalized.includes("otp") || normalized.includes("pin")) summaryBits.push("asks OTP/PIN");
+    if (merged.upiIds.length > 0) summaryBits.push("UPI shared");
+    if (merged.phoneNumbers.length > 0) summaryBits.push("phone shared");
+    if (merged.employeeIds.length > 0) summaryBits.push("employee id given");
+    if (summaryBits.length > 0) {
+      let newSummary = summaryBits.join(", ");
+      if (newSummary.length > 160) newSummary = `${newSummary.slice(0, 157)}...`;
+      session.runningSummary = newSummary;
+    }
+
     const maxTurns = Number(process.env.MAX_TURNS || 12);
     const linkPressure =
       merged.phishingLinks.length > 0 || /link|click|upi|payment/.test(normalized);
@@ -190,7 +225,7 @@ router.post("/honeypot", async (req: Request, res: Response) => {
       lastIntents: session.lastIntents
     });
 
-    const summary = summarize(conversationHistory, merged, session.story, session.persona);
+    const summary = session.runningSummary || summarize(conversationHistory, merged, session.story, session.persona);
     let reply = "";
     let councilNotes = "";
     if (process.env.COUNCIL_MODE === "true") {
@@ -223,7 +258,8 @@ router.post("/honeypot", async (req: Request, res: Response) => {
           story: session.story,
           lastReplies: session.lastReplies,
           turnNumber: session.engagement.totalMessagesExchanged + 1,
-          extracted: merged
+          extracted: merged,
+          facts: session.facts
         },
         session.persona,
         summary,
@@ -234,6 +270,11 @@ router.post("/honeypot", async (req: Request, res: Response) => {
       reply = "OK";
     }
     logHoneypot(reply);
+
+    session.messages.push({ sender: "honeypot", text: reply, timestamp: nowIso });
+    if (session.messages.length > 30) {
+      session.messages = session.messages.slice(-30);
+    }
 
     const now = new Date().toISOString();
     session.state = planner.updatedState;

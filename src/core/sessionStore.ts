@@ -13,6 +13,23 @@ export type EngagementMetrics = {
   lastMessageAt: string;
 };
 
+export type SessionMessage = {
+  sender: "scammer" | "honeypot";
+  text: string;
+  timestamp: string;
+};
+
+export type SessionFacts = {
+  employeeIds: Set<string>;
+  phones: Set<string>;
+  links: Set<string>;
+  orgs: Set<string>;
+  hasLink: boolean;
+  hasEmployeeId: boolean;
+  hasPhone: boolean;
+  asked: Set<string>;
+};
+
 export type SessionMemory = {
   sessionId: string;
   state: SessionState;
@@ -25,6 +42,9 @@ export type SessionMemory = {
   lastIntents: Intent[];
   lastReplies: string[];
   agentNotes: string;
+  messages: SessionMessage[];
+  facts: SessionFacts;
+  runningSummary: string;
   callbackSent: boolean;
 };
 
@@ -61,6 +81,50 @@ const DEFAULT_GOALS: GoalFlags = {
   gotExplicitOtpAsk: false
 };
 
+const DEFAULT_FACTS: SessionFacts = {
+  employeeIds: new Set<string>(),
+  phones: new Set<string>(),
+  links: new Set<string>(),
+  orgs: new Set<string>(),
+  hasLink: false,
+  hasEmployeeId: false,
+  hasPhone: false,
+  asked: new Set<string>()
+};
+
+function normalizeFacts(raw: Partial<SessionFacts> | undefined): SessionFacts {
+  const toSet = (value: unknown) =>
+    new Set<string>(Array.isArray(value) ? (value as string[]) : []);
+  const employeeIds = toSet(raw?.employeeIds);
+  const phones = toSet(raw?.phones);
+  const links = toSet(raw?.links);
+  const orgs = toSet(raw?.orgs);
+  const asked = toSet(raw?.asked);
+  return {
+    employeeIds,
+    phones,
+    links,
+    orgs,
+    asked,
+    hasLink: Boolean(raw?.hasLink) || links.size > 0,
+    hasEmployeeId: Boolean(raw?.hasEmployeeId) || employeeIds.size > 0,
+    hasPhone: Boolean(raw?.hasPhone) || phones.size > 0
+  };
+}
+
+function serializeFacts(facts: SessionFacts): Record<string, unknown> {
+  return {
+    employeeIds: Array.from(facts.employeeIds),
+    phones: Array.from(facts.phones),
+    links: Array.from(facts.links),
+    orgs: Array.from(facts.orgs),
+    asked: Array.from(facts.asked),
+    hasLink: facts.hasLink,
+    hasEmployeeId: facts.hasEmployeeId,
+    hasPhone: facts.hasPhone
+  };
+}
+
 export class SessionStore {
   private sessions = new Map<string, SessionMemory>();
   private persistFile: string | null;
@@ -80,13 +144,27 @@ export class SessionStore {
     const raw = fs.readFileSync(this.persistFile, "utf-8");
     const parsed = JSON.parse(raw) as SessionMemory[];
     for (const session of parsed) {
-      this.sessions.set(session.sessionId, session);
+      const hydrated: SessionMemory = {
+        ...session,
+        facts: normalizeFacts((session as unknown as { facts?: SessionFacts }).facts),
+        messages: Array.isArray((session as unknown as { messages?: SessionMessage[] }).messages)
+          ? (session as unknown as { messages: SessionMessage[] }).messages
+          : [],
+        runningSummary:
+          typeof (session as unknown as { runningSummary?: string }).runningSummary === "string"
+            ? (session as unknown as { runningSummary: string }).runningSummary
+            : ""
+      };
+      this.sessions.set(session.sessionId, hydrated);
     }
   }
 
   private saveToFile(): void {
     if (!this.persistFile) return;
-    const payload = Array.from(this.sessions.values());
+    const payload = Array.from(this.sessions.values()).map((session) => ({
+      ...session,
+      facts: serializeFacts(session.facts)
+    }));
     fs.writeFileSync(this.persistFile, JSON.stringify(payload, null, 2));
   }
 
@@ -103,6 +181,9 @@ export class SessionStore {
       if (!existing.extractedIntelligence.employeeIds) {
         existing.extractedIntelligence.employeeIds = [];
       }
+      if (!existing.messages) existing.messages = [];
+      existing.facts = normalizeFacts(existing.facts);
+      if (typeof existing.runningSummary !== "string") existing.runningSummary = "";
       this.update(existing);
       return existing;
     }
@@ -126,6 +207,9 @@ export class SessionStore {
       lastIntents: [],
       lastReplies: [],
       agentNotes: "",
+      messages: [],
+      facts: normalizeFacts(DEFAULT_FACTS),
+      runningSummary: "",
       callbackSent: false
     };
 
@@ -157,6 +241,9 @@ export class SessionStore {
       lastIntents: [],
       lastReplies: [],
       agentNotes: "",
+      messages: [],
+      facts: normalizeFacts(DEFAULT_FACTS),
+      runningSummary: "",
       callbackSent: false
     };
     this.sessions.set(session.sessionId, reset);

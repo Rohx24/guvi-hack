@@ -1,6 +1,7 @@
 import { SessionState, StorySummary } from "./planner";
 import type { Persona } from "./persona";
 import type { ExtractedIntelligence } from "./extractor";
+import type { SessionFacts } from "./sessionStore";
 
 export type WriterInput = {
   nextIntent:
@@ -19,6 +20,7 @@ export type WriterInput = {
   lastReplies: string[];
   turnNumber: number;
   extracted?: ExtractedIntelligence;
+  facts?: SessionFacts;
 };
 
 const humanResistancePool = [
@@ -90,8 +92,11 @@ function hasLinkOrUpiOrPhone(text: string): boolean {
 function pickAskQuestion(input: WriterInput): string {
   const lastReplies = input.lastReplies || [];
   const extracted = input.extracted;
-  const asked = (keywords: string[]) =>
-    lastReplies.some((r) => keywords.some((k) => normalize(r).includes(k)));
+  const askedSet = input.facts?.asked;
+  const asked = (key: string, keywords: string[]) => {
+    if (askedSet && askedSet.has(key)) return true;
+    return lastReplies.some((r) => keywords.some((k) => normalize(r).includes(k)));
+  };
 
   const steps: Array<{ key: string; keywords: string[]; question: string; skip?: boolean }> = [
     {
@@ -132,7 +137,8 @@ function pickAskQuestion(input: WriterInput): string {
   for (const step of steps) {
     if (step.key === "callback" && extracted && extracted.phoneNumbers.length > 0) continue;
     if (step.key === "link" && !hasLinkOrUpiOrPhone(input.lastScammerMessage)) continue;
-    if (asked(step.keywords)) continue;
+    if (asked(step.key, step.keywords)) continue;
+    if (askedSet) askedSet.add(step.key);
     return step.question;
   }
 
@@ -144,6 +150,14 @@ function buildReply(base: string, question?: string): string {
   const trimmed = base.trim();
   if (trimmed.endsWith("?")) return trimmed;
   return `${trimmed} ${question}`;
+}
+
+function addEmotionIfNeeded(reply: string, lastWasQuestion: boolean): string {
+  if (!lastWasQuestion) return reply;
+  const lower = reply.toLowerCase();
+  if (/(worried|scared|confused|nervous|anxious)/.test(lower)) return reply;
+  const candidate = `I'm worried. ${reply}`;
+  return candidate.length <= 140 ? candidate : reply;
 }
 
 function isValid(reply: string, lastReplies: string[]): boolean {
@@ -173,26 +187,32 @@ export function writeReply(input: WriterInput): string {
   const hasOtpOrPin = /\b(otp|pin)\b/.test(normalized);
   const hasPressure = /urgent|blocked|immediately|suspended|verify/.test(normalized);
   const linkPressure = /link|click|upi|payment/.test(normalized);
+  const facts = input.facts;
 
   const askQuestion = pickAskQuestion(input);
+  const lastReply = input.lastReplies[input.lastReplies.length - 1] || "";
+  const lastWasQuestion = lastReply.trim().endsWith("?");
 
   let base = "";
   if (hasOtpOrPin) {
     base = pickFromPool(humanResistancePool, input.lastReplies);
     const withAsk = buildReply(base, askQuestion);
-    return isValid(withAsk, input.lastReplies) ? withAsk : base;
+    const candidate = isValid(withAsk, input.lastReplies) ? withAsk : base;
+    return addEmotionIfNeeded(candidate, lastWasQuestion);
   }
 
   if (linkPressure) {
     base = pickFromPool(humanResistancePool, input.lastReplies);
     const withAsk = buildReply(base, askQuestion);
-    return isValid(withAsk, input.lastReplies) ? withAsk : base;
+    const candidate = isValid(withAsk, input.lastReplies) ? withAsk : base;
+    return addEmotionIfNeeded(candidate, lastWasQuestion);
   }
 
   if (hasPressure || input.stressScore > 0.6) {
     base = pickFromPool(softCompliancePool, input.lastReplies);
     const withAsk = buildReply(base, askQuestion);
-    return isValid(withAsk, input.lastReplies) ? withAsk : base;
+    const candidate = isValid(withAsk, input.lastReplies) ? withAsk : base;
+    return addEmotionIfNeeded(candidate, lastWasQuestion);
   }
 
   const roll = Math.random();
@@ -200,7 +220,14 @@ export function writeReply(input: WriterInput): string {
   if (roll < 0.75) return pickFromPool(frictionPool, input.lastReplies);
   base = pickFromPool(humanResistancePool, input.lastReplies);
   const withAsk = buildReply(base, askQuestion);
-  return isValid(withAsk, input.lastReplies) ? withAsk : base;
+  const candidate = isValid(withAsk, input.lastReplies) ? withAsk : base;
+  if (facts?.hasLink && Math.random() < 0.35) {
+    return addEmotionIfNeeded(`You already sent a link. ${candidate}`, lastWasQuestion);
+  }
+  if (facts?.hasEmployeeId && Math.random() < 0.35) {
+    return addEmotionIfNeeded(`You already shared employee ID. ${candidate}`, lastWasQuestion);
+  }
+  return addEmotionIfNeeded(candidate, lastWasQuestion);
 }
 
 export type OpenAIWriter = (
