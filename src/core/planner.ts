@@ -1,5 +1,6 @@
 import { clamp01 } from "../utils/mask";
 import { ExtractedIntelligence, normalizeText } from "./extractor";
+import type { Context } from "./memory";
 
 export type SessionState = {
   anxiety: number;
@@ -188,28 +189,22 @@ function pickNextIntent(input: PlannerInput): Intent {
   if (forceEmployee && !burned.has("ask_employee_id")) return "ask_employee_id";
 
   const ladder: Intent[] = [
-    // Phase 1 – Legitimacy Probe
     "ask_ticket_or_case_id",
     "ask_branch_city",
     "ask_department_name",
-    // Phase 2 – Authority Validation
     "ask_employee_id",
     "ask_designation",
     "ask_callback_number",
     "ask_escalation_authority",
-    // Phase 3 – Transaction Anchoring
     "ask_transaction_amount_time",
     "ask_transaction_mode",
     "ask_merchant_receiver",
-    // Phase 4 – Device & Location
     "ask_device_type",
     "ask_login_location",
     "ask_ip_or_reason",
-    // Phase 5 – Process Pressure
     "ask_otp_reason",
     "ask_no_notification_reason",
     "ask_internal_system",
-    // Phase 6 – Final Intelligence Harvest
     "ask_phone_numbers",
     "ask_sender_id_or_email",
     "ask_links",
@@ -250,11 +245,57 @@ export function planNext(input: PlannerInput): PlannerOutput {
 
   const nextSlot = pickNextIntent(input);
 
-  const agentNotes = `mode=${mode}, scamScore=${scamScore.toFixed(
+  const agentNotes = `mode=${mode}, scamScore=${scamScore.toFixed(2)}, stressScore=${stressScore.toFixed(
     2
-  )}, stressScore=${stressScore.toFixed(2)}, slot=${nextSlot}, turns=${
-    engagement.totalMessagesExchanged
-  }`;
+  )}, slot=${nextSlot}, turns=${engagement.totalMessagesExchanged}`;
 
   return { nextSlot, mode, updatedState, scamDetected, agentNotes };
+}
+
+// Conversational Memory Planner (new)
+export type NextIntent =
+  | "ask_callback_number"
+  | "ask_employee_id"
+  | "ask_case_id"
+  | "ask_upi"
+  | "ask_branch"
+  | "ask_department"
+  | "ask_official_email";
+
+export type PlannerResult = {
+  intent: NextIntent;
+  tone: "WARY" | "NEUTRAL";
+  reason: string;
+};
+
+function mentionsUrgency(text: string): boolean {
+  const t = text.toLowerCase();
+  return /(urgent|immediately|blocked|suspended|asap)/.test(t);
+}
+
+export function planNextMemory(context: Context, lastMessage: string): PlannerResult {
+  const forbidden = new Set<NextIntent>();
+
+  if (context.extracted.phone) forbidden.add("ask_callback_number");
+  if (context.extracted.id) forbidden.add("ask_employee_id");
+
+  const tone: "WARY" | "NEUTRAL" = mentionsUrgency(lastMessage) ? "WARY" : "NEUTRAL";
+
+  const candidates: Array<{ intent: NextIntent; reason: string }> = [
+    { intent: "ask_employee_id", reason: "need_employee_id" },
+    { intent: "ask_case_id", reason: "need_case_id" },
+    { intent: "ask_upi", reason: "need_upi" },
+    { intent: "ask_callback_number", reason: "need_callback" },
+    { intent: "ask_official_email", reason: "need_official_email" },
+    { intent: "ask_branch", reason: "need_branch" },
+    { intent: "ask_department", reason: "need_department" }
+  ];
+
+  for (const c of candidates) {
+    if (!forbidden.has(c.intent)) {
+      return { intent: c.intent, tone, reason: c.reason };
+    }
+  }
+
+  return { intent: "ask_case_id", tone, reason: "fallback" };
 }
