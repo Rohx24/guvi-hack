@@ -395,7 +395,8 @@ const handleHoneypot = async (req: Request, res: Response) => {
       engagement: { totalMessagesExchanged: session.engagement.totalMessagesExchanged },
       extracted: merged,
       askedQuestions: session.askedSlots,
-      lastIntents: session.lastIntents
+      lastIntents: session.lastIntents,
+      lastScammerMessage: messageText
     });
 
     const summary =

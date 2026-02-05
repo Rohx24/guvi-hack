@@ -28,18 +28,26 @@ const EXIT_PHRASES = [
   "complaint"
 ];
 
-const DELAY_EXCUSES = [
-  "network",
-  "otp not received",
-  "otp not coming",
-  "app stuck",
-  "app is stuck",
+const DEAD_ENDS = [
+  "driving",
   "meeting",
-  "battery",
   "busy",
-  "later",
-  "will check",
-  "not now"
+  "call later",
+  "network is slow",
+  "battery",
+  "eating",
+  "sleeping"
+];
+
+const ALLOWED_FRICTION = [
+  "confused",
+  "worried",
+  "error",
+  "stuck",
+  "loading",
+  "app",
+  "website",
+  "passbook"
 ];
 
 function normalize(text: string): string {
@@ -91,9 +99,9 @@ function hasExitPhrase(text: string): boolean {
   return EXIT_PHRASES.some((phrase) => lower.includes(phrase));
 }
 
-function hasDelayExcuse(text: string): boolean {
+function hasDeadEnd(text: string): boolean {
   const lower = text.toLowerCase();
-  return DELAY_EXCUSES.some((phrase) => lower.includes(phrase));
+  return DEAD_ENDS.some((phrase) => lower.includes(phrase));
 }
 
 export type ValidationContext = {
@@ -109,16 +117,17 @@ export type ValidationResult = { ok: boolean; reason?: string };
 
 export function validateReply(reply: string, ctx: ValidationContext): ValidationResult {
   if (!reply || reply.trim().length === 0) return { ok: false, reason: "empty" };
-  if (reply.length > 160) return { ok: false, reason: "too_long" };
-  if (linesCount(reply) > 2) return { ok: false, reason: "too_many_lines" };
+  if (reply.length > 200) return { ok: false, reason: "too_long" };
+  if (linesCount(reply) > 3) return { ok: false, reason: "too_many_lines" };
   if (containsLongDigits(reply)) return { ok: false, reason: "digits" };
   if (containsForbidden(reply)) return { ok: false, reason: "forbidden" };
   if (asksForSensitive(reply)) return { ok: false, reason: "sensitive" };
+  if (!reply.includes("?")) return { ok: false, reason: "no_question" };
   if (asksForLinkWithoutContext(reply, ctx.facts, ctx.lastScammerMessage)) {
     return { ok: false, reason: "link_without_context" };
   }
   if (repeatsLast(reply, ctx.lastReplies)) return { ok: false, reason: "repeat" };
-  if (hasDelayExcuse(reply)) return { ok: false, reason: "delay_excuse" };
+  if (hasDeadEnd(reply)) return { ok: false, reason: "dead_end" };
 
   if (hasExitPhrase(reply)) return { ok: false, reason: "exit_phrase" };
 

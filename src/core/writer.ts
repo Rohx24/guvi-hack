@@ -43,35 +43,33 @@ export type WriterInput = {
 };
 
 const CONFUSED_POOL = [
-  "Why am I getting this suddenly?",
-  "I'm a bit confused about this.",
-  "This doesn't match what I did.",
-  "What exactly triggered this?"
+  "I am trying but the app is confusing me.",
+  "I am trying, but I don't understand this screen.",
+  "I want to do it, but the app is showing a warning."
 ];
 
 const SUSPICIOUS_POOL = [
-  "You already mentioned this once. Why again?",
-  "Bank usually doesn't ask like this, right?",
-  "Something feels off - can you clarify?",
-  "Why is this so urgent again?"
+  "I am trying, but it is asking for something official.",
+  "I am trying, but the website wants a proper verification detail.",
+  "I am trying, but it is not going ahead without your details."
 ];
 
 const ASSERTIVE_POOL = [
-  "I need the official details before I proceed.",
-  "Let me verify with the exact details.",
-  "I'm not comfortable yet, I need official verification."
+  "I want to cooperate, but it is blocked without your details.",
+  "I am trying, but the app needs your official info to continue.",
+  "I am trying, but it is not accepting without your verification."
 ];
 
 const CUNNING_POOL = [
-  "Earlier you said one thing, now it's different - which is correct?",
-  "If this is genuine, the internal process should be clear.",
-  "Which system flagged this on your end?"
+  "I am trying, but it asks for a verification step you should know.",
+  "I am trying, but it needs a system detail you can confirm.",
+  "I am trying, but it asks for the official process name."
 ];
 
 const HIGH_PRESSURE_POOL = [
-  "I can verify only with official case details.",
-  "This needs exact case details before I move.",
-  "If it's official, the ticket and designation should be easy."
+  "I am trying, but it needs exact case details to proceed.",
+  "I am trying, but it requires your official verification code.",
+  "I am trying, but it will not move without your details."
 ];
 
 function normalize(text: string): string {
@@ -105,28 +103,28 @@ function pickBase(stage: EngagementStage, level: number, lastReplies: string[]):
 }
 
 const INTENT_QUESTIONS: Record<string, string> = {
-  ask_ticket_or_case_id: "Do you have a ticket or case ID?",
-  ask_branch_city: "Which branch or city is this from?",
-  ask_department_name: "Which department is handling this?",
-  ask_employee_id: "What's your employee ID?",
-  ask_designation: "What's your designation?",
-  ask_callback_number: "What's the official callback or toll-free number?",
-  ask_escalation_authority: "Who is the escalation authority or manager here?",
-  ask_transaction_amount_time: "What transaction amount and time is this about?",
-  ask_transaction_mode: "Which mode was used - UPI, IMPS, or netbanking?",
-  ask_merchant_receiver: "Who is the merchant or receiver name?",
-  ask_device_type: "Which device type was used?",
-  ask_login_location: "Which city/location was this login from?",
-  ask_ip_or_reason: "Why was this login flagged as unusual?",
-  ask_otp_reason: "Why do you need OTP for this?",
-  ask_no_notification_reason: "Why didn't the app show any alert?",
-  ask_internal_system: "Which internal system flagged this?",
-  ask_phone_numbers: "Which official number are you calling from?",
-  ask_sender_id_or_email: "What's the official SMS sender ID or email domain?",
-  ask_links: "Why is a link needed for this?",
-  ask_upi_or_beneficiary: "What's the UPI ID or beneficiary name?",
-  ask_names_used: "What name was used in your system?",
-  ask_keywords_used: "Which keywords or alerts were triggered?"
+  ask_ticket_or_case_id: "It asks for the Case Reference ID. What should I type there?",
+  ask_branch_city: "It asks for Branch/City. Which one should I select?",
+  ask_department_name: "It asks for Department Name. What should I enter?",
+  ask_employee_id: "It is asking for Employee Code of the caller. Can you give me that?",
+  ask_designation: "It asks for your Designation. What should I put?",
+  ask_callback_number: "It asks for official callback/toll-free. What is it?",
+  ask_escalation_authority: "It asks for supervisor/manager name. Who is it?",
+  ask_transaction_amount_time: "It asks for transaction amount and time. What should I fill?",
+  ask_transaction_mode: "It asks for mode (UPI/IMPS/netbanking). Which is it?",
+  ask_merchant_receiver: "It asks for beneficiary/receiver name. What is it?",
+  ask_device_type: "It asks for device type. Which device is flagged?",
+  ask_login_location: "It asks for login city/location. Which one is it?",
+  ask_ip_or_reason: "It asks why login was flagged. What reason should I mention?",
+  ask_otp_reason: "It asks why OTP is needed. What should I say?",
+  ask_no_notification_reason: "It asks why no alert showed. What should I write?",
+  ask_internal_system: "It asks which internal system flagged this. What is the system name?",
+  ask_phone_numbers: "It asks for the number you are calling from. What is it?",
+  ask_sender_id_or_email: "It asks for official SMS sender ID or email. What is it?",
+  ask_links: "It asks for the verification link/domain. What is it?",
+  ask_upi_or_beneficiary: "It asks for UPI handle or beneficiary name. What is it?",
+  ask_names_used: "It asks for the name used in your system. What should I enter?",
+  ask_keywords_used: "It asks what keyword/alert triggered this. What should I write?"
 };
 
 function applyFactContext(slot: string, question: string | undefined, facts?: SessionFacts): string {

@@ -61,6 +61,7 @@ export type PlannerInput = {
   extracted: ExtractedIntelligence;
   askedQuestions: Set<string>;
   lastIntents: Intent[];
+  lastScammerMessage: string;
 };
 
 export type PlannerOutput = {
@@ -137,9 +138,54 @@ function intentRepeated(intent: Intent, lastIntents: Intent[]): boolean {
   return recent.includes(intent);
 }
 
+function intentRepeatedCount(intent: Intent, lastIntents: Intent[]): number {
+  return lastIntents.filter((i) => i === intent).length;
+}
+
 function pickNextIntent(input: PlannerInput): Intent {
   const asked = input.askedQuestions;
   const extracted = input.extracted;
+  const normalized = normalizeText(input.lastScammerMessage);
+
+  const burned = new Set<Intent>();
+  const allIntents: Intent[] = [
+    "ask_ticket_or_case_id",
+    "ask_branch_city",
+    "ask_department_name",
+    "ask_employee_id",
+    "ask_designation",
+    "ask_callback_number",
+    "ask_escalation_authority",
+    "ask_transaction_amount_time",
+    "ask_transaction_mode",
+    "ask_merchant_receiver",
+    "ask_device_type",
+    "ask_login_location",
+    "ask_ip_or_reason",
+    "ask_otp_reason",
+    "ask_no_notification_reason",
+    "ask_internal_system",
+    "ask_phone_numbers",
+    "ask_sender_id_or_email",
+    "ask_links",
+    "ask_upi_or_beneficiary",
+    "ask_names_used",
+    "ask_keywords_used"
+  ];
+
+  for (const intent of allIntents) {
+    if (intentRepeatedCount(intent, input.lastIntents) >= 1) burned.add(intent);
+  }
+
+  if (extracted.caseIds.length > 0) burned.add("ask_ticket_or_case_id");
+  if (extracted.employeeIds.length > 0) burned.add("ask_employee_id");
+  if (extracted.upiIds.length > 0) burned.add("ask_upi_or_beneficiary");
+
+  const forceUpi = /(pay|transfer|send money|send cash|payment)/.test(normalized);
+  const forceEmployee = /(verification|kyc)/.test(normalized);
+
+  if (forceUpi && !burned.has("ask_upi_or_beneficiary")) return "ask_upi_or_beneficiary";
+  if (forceEmployee && !burned.has("ask_employee_id")) return "ask_employee_id";
 
   const ladder: Intent[] = [
     // Phase 1 – Legitimacy Probe
@@ -173,6 +219,7 @@ function pickNextIntent(input: PlannerInput): Intent {
   ];
 
   for (const intent of ladder) {
+    if (burned.has(intent)) continue;
     if (intent === "ask_ticket_or_case_id" && extracted.caseIds.length > 0) continue;
     if (intent === "ask_links" && extracted.phishingLinks.length > 0) continue;
     if (intent === "ask_upi_or_beneficiary" && extracted.upiIds.length > 0) continue;
