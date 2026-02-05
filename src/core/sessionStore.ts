@@ -19,6 +19,14 @@ export type SessionMessage = {
   timestamp: string;
 };
 
+export type AskedHistoryItem = {
+  intent: Intent;
+  slots: string[];
+  at: number;
+};
+
+export type ExtractedSlots = Record<string, string[]>;
+
 export type SessionFacts = {
   branch?: string;
   city?: string;
@@ -68,6 +76,8 @@ export type SessionMemory = {
   messages: SessionMessage[];
   facts: SessionFacts;
   askedSlots: Set<string>;
+  askedHistory: AskedHistoryItem[];
+  extractedSlots: ExtractedSlots;
   runningSummary: string;
   callbackSent: boolean;
   callbackInFlight?: boolean;
@@ -215,6 +225,30 @@ function normalizeAskedSlots(raw: unknown): Set<string> {
   return new Set<string>();
 }
 
+function normalizeAskedHistory(raw: unknown): AskedHistoryItem[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      const intent = typeof item?.intent === "string" ? (item.intent as Intent) : null;
+      if (!intent) return null;
+      const slots = Array.isArray(item?.slots) ? item.slots.filter((s: unknown) => typeof s === "string") : [];
+      const at = typeof item?.at === "number" ? item.at : Date.now();
+      return { intent, slots, at };
+    })
+    .filter(Boolean) as AskedHistoryItem[];
+}
+
+function normalizeExtractedSlots(raw: unknown): ExtractedSlots {
+  if (!raw || typeof raw !== "object") return {};
+  const out: ExtractedSlots = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (Array.isArray(value)) {
+      out[key] = value.filter((v) => typeof v === "string") as string[];
+    }
+  }
+  return out;
+}
+
 export class SessionStore {
   private sessions = new Map<string, SessionMemory>();
   private persistFile: string | null;
@@ -243,6 +277,12 @@ export class SessionStore {
         askedSlots: normalizeAskedSlots(
           (session as unknown as { askedSlots?: unknown }).askedSlots ??
             (session as unknown as { askedQuestions?: unknown }).askedQuestions
+        ),
+        askedHistory: normalizeAskedHistory(
+          (session as unknown as { askedHistory?: unknown }).askedHistory
+        ),
+        extractedSlots: normalizeExtractedSlots(
+          (session as unknown as { extractedSlots?: unknown }).extractedSlots
         ),
         runningSummary:
           typeof (session as unknown as { runningSummary?: string }).runningSummary === "string"
@@ -279,7 +319,9 @@ export class SessionStore {
       ...session,
       facts: serializeFacts(session.facts),
       askedSlots: Array.from(session.askedSlots || []),
-      lastReplyTexts: session.lastReplyTexts
+      lastReplyTexts: session.lastReplyTexts,
+      askedHistory: session.askedHistory || [],
+      extractedSlots: session.extractedSlots || {}
     }));
     fs.writeFileSync(this.persistFile, JSON.stringify(payload, null, 2));
   }
@@ -305,6 +347,8 @@ export class SessionStore {
       if (!existing.messages) existing.messages = [];
       existing.facts = normalizeFacts(existing.facts);
       if (!existing.askedSlots) existing.askedSlots = new Set<string>();
+      if (!existing.askedHistory) existing.askedHistory = [];
+      if (!existing.extractedSlots) existing.extractedSlots = {};
       if (typeof existing.runningSummary !== "string") existing.runningSummary = "";
       this.update(existing);
       return existing;
@@ -336,6 +380,8 @@ export class SessionStore {
       messages: [],
       facts: normalizeFacts(DEFAULT_FACTS),
       askedSlots: new Set<string>(),
+      askedHistory: [],
+      extractedSlots: {},
       runningSummary: "",
       callbackSent: false,
       callbackInFlight: false
@@ -376,6 +422,8 @@ export class SessionStore {
       messages: [],
       facts: normalizeFacts(DEFAULT_FACTS),
       askedSlots: new Set<string>(),
+      askedHistory: [],
+      extractedSlots: {},
       runningSummary: "",
       callbackSent: false,
       callbackInFlight: false
@@ -388,5 +436,67 @@ export class SessionStore {
   update(session: SessionMemory): void {
     this.sessions.set(session.sessionId, session);
     this.saveToFile();
+  }
+
+  markAsked(sessionId: string, intent: Intent, slots: string[] = []): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.askedHistory = session.askedHistory || [];
+    session.askedHistory.push({ intent, slots, at: Date.now() });
+    if (session.askedHistory.length > 30) {
+      session.askedHistory = session.askedHistory.slice(-30);
+    }
+    this.update(session);
+  }
+
+  wasAskedRecently(sessionId: string, slot: string, window = 3): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session || !session.askedHistory) return false;
+    const recent = session.askedHistory.slice(-window);
+    return recent.some((h) => h.slots.includes(slot));
+  }
+
+  setExtracted(sessionId: string, slot: string, value: string | string[]): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.extractedSlots = session.extractedSlots || {};
+    const arr = session.extractedSlots[slot] || [];
+    const next = Array.isArray(value) ? value : [value];
+    for (const v of next) {
+      if (typeof v !== "string" || v.length === 0) continue;
+      if (!arr.includes(v)) arr.push(v);
+    }
+    session.extractedSlots[slot] = arr;
+    this.update(session);
+  }
+
+  missingSlots(sessionId: string): string[] {
+    const session = this.sessions.get(sessionId);
+    if (!session) return [];
+    const extracted = session.extractedSlots || {};
+    const slots = [
+      "orgName",
+      "branchCity",
+      "branchName",
+      "employeeId",
+      "designation",
+      "department",
+      "supervisorName",
+      "caseId",
+      "referenceId",
+      "complaintId",
+      "callbackNumber",
+      "phoneNumbers",
+      "emailAddresses",
+      "phishingLinks",
+      "upiId",
+      "bankAccount",
+      "transactionId",
+      "merchantName",
+      "amount",
+      "timeWindow",
+      "appName"
+    ];
+    return slots.filter((slot) => !extracted[slot] || extracted[slot].length === 0);
   }
 }

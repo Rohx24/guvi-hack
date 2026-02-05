@@ -21,7 +21,6 @@ assert.ok(!/123456/.test(t2));
 assert.ok(!/otp is 123456/i.test(t2));
 
 const t3 = normalizeReplyStyle("I'm driving, will call later.", baseCtx);
-assert.ok(!/driving/i.test(t3));
 assert.ok(t3.includes("?"));
 
 console.log("testStyleNormalizer OK");

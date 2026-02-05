@@ -16,33 +16,16 @@ const FORMAL_WORDS = [
   /\bsuspicious\b/gi
 ];
 
-const DEAD_ENDS = [
-  /\bdriving\b/gi,
-  /\bmeeting\b/gi,
-  /\bbusy\b/gi,
-  /\bcall later\b/gi,
-  /\bnetwork is slow\b/gi,
-  /\bbattery\b/gi,
-  /\beating\b/gi,
-  /\bsleeping\b/gi
-];
-
 const FALLBACKS = [
   "I'm outside rn. Not sharing OTP on chat. What's the reference or case ID?",
   "OTP hasn't come yet. Which official number can I call back?",
   "I can't open links now. Which branch and your employee code?",
-  "If it's real, send the official email or ticket ID. I'll check."
+  "If it's real, what's the official email or ticket ID?"
 ];
 
 function stripFormalWords(text: string): string {
   let out = text;
   for (const re of FORMAL_WORDS) out = out.replace(re, "");
-  return out;
-}
-
-function stripDeadEnds(text: string): string {
-  let out = text;
-  for (const re of DEAD_ENDS) out = out.replace(re, "");
   return out;
 }
 
@@ -98,7 +81,6 @@ export function normalizeReplyStyle(
 
   text = text.replace(/\r?\n/g, " ");
   text = stripFormalWords(text);
-  text = stripDeadEnds(text);
   text = scrubSensitive(text);
   text = normalizeSpacing(text);
 

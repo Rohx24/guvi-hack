@@ -65,6 +65,7 @@ export type PlannerInput = {
   lastScammerMessage: string;
   repeatDemand?: boolean;
   refusedCaseId?: boolean;
+  askedHistory?: Array<{ intent: Intent; slots: string[]; at: number }>;
 };
 
 export type PlannerOutput = {
@@ -145,6 +146,39 @@ function intentRepeatedCount(intent: Intent, lastIntents: Intent[]): number {
   return lastIntents.filter((i) => i === intent).length;
 }
 
+const INTENT_SLOTS: Record<Intent, string[]> = {
+  ask_ticket_or_case_id: ["caseId", "referenceId", "complaintId"],
+  ask_branch_city: ["branchCity", "branchName"],
+  ask_department_name: ["department"],
+  ask_employee_id: ["employeeId"],
+  ask_designation: ["designation"],
+  ask_callback_number: ["callbackNumber", "phoneNumbers"],
+  ask_escalation_authority: ["supervisorName"],
+  ask_transaction_amount_time: ["transactionId", "amount", "timeWindow"],
+  ask_transaction_mode: ["transactionId", "merchantName"],
+  ask_merchant_receiver: ["merchantName"],
+  ask_device_type: ["appName"],
+  ask_login_location: ["branchCity"],
+  ask_ip_or_reason: ["transactionId"],
+  ask_otp_reason: [],
+  ask_no_notification_reason: [],
+  ask_internal_system: [],
+  ask_phone_numbers: ["phoneNumbers"],
+  ask_sender_id_or_email: ["emailAddresses"],
+  ask_links: ["phishingLinks"],
+  ask_upi_or_beneficiary: ["upiId"],
+  ask_names_used: ["orgName"],
+  ask_keywords_used: []
+};
+
+function wasAskedRecently(input: PlannerInput, intent: Intent): boolean {
+  if (!input.askedHistory || input.askedHistory.length === 0) return false;
+  const slots = INTENT_SLOTS[intent] || [];
+  if (slots.length === 0) return false;
+  const recent = input.askedHistory.slice(-3);
+  return recent.some((h) => slots.some((slot) => h.slots.includes(slot)));
+}
+
 function pickNextIntent(input: PlannerInput): Intent {
   const asked = input.askedQuestions;
   const extracted = input.extracted;
@@ -185,6 +219,30 @@ function pickNextIntent(input: PlannerInput): Intent {
   if (extracted.employeeIds.length > 0) burned.add("ask_employee_id");
   if (extracted.upiIds.length > 0) burned.add("ask_upi_or_beneficiary");
 
+  const rotation: Intent[] = [];
+  const missingEmployee = extracted.employeeIds.length === 0;
+  const missingBranch = !asked.has("ask_branch_city");
+  if (missingEmployee) rotation.push("ask_employee_id");
+  if (missingBranch) rotation.push("ask_branch_city");
+  if (!burned.has("ask_ticket_or_case_id")) rotation.push("ask_ticket_or_case_id");
+  if (!burned.has("ask_designation")) rotation.push("ask_designation");
+  if (!burned.has("ask_department_name")) rotation.push("ask_department_name");
+  if (!burned.has("ask_callback_number")) rotation.push("ask_callback_number");
+  if (!burned.has("ask_transaction_amount_time")) rotation.push("ask_transaction_amount_time");
+  if (!burned.has("ask_links") && extracted.phishingLinks.length === 0) rotation.push("ask_links");
+  if (!burned.has("ask_sender_id_or_email")) rotation.push("ask_sender_id_or_email");
+  if (!burned.has("ask_escalation_authority")) rotation.push("ask_escalation_authority");
+  if (!burned.has("ask_upi_or_beneficiary") && extracted.upiIds.length === 0)
+    rotation.push("ask_upi_or_beneficiary");
+
+  for (const intent of rotation) {
+    if (burned.has(intent)) continue;
+    if (asked.has(intent)) continue;
+    if (intentRepeated(intent, input.lastIntents)) continue;
+    if (wasAskedRecently(input, intent)) continue;
+    return intent;
+  }
+
   const forceUpi = /(pay|transfer|send money|send cash|payment)/.test(normalized);
   const forceEmployee = /(verification|kyc)/.test(normalized);
 
@@ -208,6 +266,8 @@ function pickNextIntent(input: PlannerInput): Intent {
       if (intent === "ask_links" && extracted.phishingLinks.length > 0) continue;
       if (intent === "ask_upi_or_beneficiary" && extracted.upiIds.length > 0) continue;
       if (intent === "ask_callback_number" && extracted.phoneNumbers.length > 0) continue;
+      if (wasAskedRecently(input, intent)) continue;
+      if (intentRepeated(intent, input.lastIntents)) continue;
       return intent;
     }
   }
@@ -248,6 +308,7 @@ function pickNextIntent(input: PlannerInput): Intent {
     if (intent === "ask_sender_id_or_email" && extracted.senderIds.length > 0) continue;
     if (asked.has(intent)) continue;
     if (intentRepeated(intent, input.lastIntents)) continue;
+    if (wasAskedRecently(input, intent)) continue;
     return intent;
   }
 

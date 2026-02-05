@@ -28,16 +28,6 @@ const EXIT_PHRASES = [
   "complaint"
 ];
 
-const DEAD_ENDS = [
-  "driving",
-  "meeting",
-  "busy",
-  "call later",
-  "network is slow",
-  "battery",
-  "eating",
-  "sleeping"
-];
 
 const ALLOWED_FRICTION = [
   "confused",
@@ -95,10 +85,6 @@ function hasExitPhrase(text: string): boolean {
   return EXIT_PHRASES.some((phrase) => lower.includes(phrase));
 }
 
-function hasDeadEnd(text: string): boolean {
-  const lower = text.toLowerCase();
-  return DEAD_ENDS.some((phrase) => lower.includes(phrase));
-}
 
 export type ValidationContext = {
   lastReplies: string[];
@@ -122,8 +108,6 @@ export function validateReply(reply: string, ctx: ValidationContext): Validation
     return { ok: false, reason: "link_without_context" };
   }
   if (repeatsLast(reply, ctx.lastReplies)) return { ok: false, reason: "repeat" };
-  if (hasDeadEnd(reply)) return { ok: false, reason: "dead_end" };
-
   if (hasExitPhrase(reply)) return { ok: false, reason: "exit_phrase" };
 
   const antiBot = analyzeAntiBot(reply, ctx.lastReplies);

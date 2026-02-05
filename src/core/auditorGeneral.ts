@@ -387,7 +387,7 @@ function auditorPrompt(input: AuditorInput, candidates: { reply: string; intent:
     "If reply sounds like a bot or template (\"As an AI...\"), rewrite it.",
     "If detective/legal tone or moderation language appears, rewrite it.",
     "If it accuses the scammer or mentions scam/fraud/police, rewrite it.",
-    "If dead-end (driving / meeting / busy / call later / network slow / battery / sleeping), rewrite it.",
+    "If the reply is purely a dead-end with no question, rewrite it.",
     "If no new intel is asked or slot repeats, rewrite it.",
     "If no question mark or more than one question mark, rewrite it.",
     "If demanding tone (\"be clear\", \"answer clearly\", \"provide details\"), rewrite it.",
@@ -429,7 +429,7 @@ async function callOpenAIRevision(
             role: "user",
             content: [
               "Revise the reply to be human, cautious, and extraction-focused.",
-              "No detective/moderation language. No dead-end excuses.",
+              "No detective/moderation language. Keep one clear question.",
               "Return JSON only: {\"reply\":\"...\",\"intent\":\"...\"}.",
               `engagementStage: ${input.engagementStage}`,
               `turnIndex: ${input.turnIndex} / ${input.maxTurns}`,

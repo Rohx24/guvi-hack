@@ -10,7 +10,7 @@ import { generateReplyOpenAI } from "../core/openaiWriter";
 import { generateReplyAuditorGeneral } from "../core/auditorGeneral";
 import { logDecision, logMessage } from "../core/supabase";
 import { computeNextLevel } from "../core/levels";
-import { normalizeReplyStyle } from "../core/style";
+import { normalizeReplyStyle, safeFallbackReply } from "../core/style";
 import {
   maskDigits,
   safeLog,
@@ -240,6 +240,9 @@ const handleHoneypot = async (req: Request, res: Response) => {
       ...engagementSignals,
       turnCount
     });
+    const refusedCaseId = /(no case id|no ticket|cannot provide case|can't provide case|no reference)/i.test(
+      messageText
+    );
 
     const allSlots = [
       "ask_ticket_or_case_id",
@@ -358,6 +361,40 @@ const handleHoneypot = async (req: Request, res: Response) => {
       session.facts.upi = extractedCurrent.upiIds[0];
     }
 
+    if (extractedCurrent.employeeIds.length > 0) {
+      store.setExtracted(session.sessionId, "employeeId", extractedCurrent.employeeIds);
+    }
+    if (extractedCurrent.caseIds.length > 0) {
+      store.setExtracted(session.sessionId, "caseId", extractedCurrent.caseIds);
+      store.setExtracted(session.sessionId, "referenceId", extractedCurrent.caseIds);
+      store.setExtracted(session.sessionId, "complaintId", extractedCurrent.caseIds);
+    }
+    if (extractedCurrent.phoneNumbers.length > 0) {
+      store.setExtracted(session.sessionId, "phoneNumbers", extractedCurrent.phoneNumbers);
+      store.setExtracted(session.sessionId, "callbackNumber", extractedCurrent.phoneNumbers);
+    }
+    if (extractedCurrent.tollFreeNumbers.length > 0) {
+      store.setExtracted(session.sessionId, "callbackNumber", extractedCurrent.tollFreeNumbers);
+    }
+    if (extractedCurrent.phishingLinks.length > 0) {
+      store.setExtracted(session.sessionId, "phishingLinks", extractedCurrent.phishingLinks);
+    }
+    if (extractedCurrent.upiIds.length > 0) {
+      store.setExtracted(session.sessionId, "upiId", extractedCurrent.upiIds);
+    }
+    if (extractedCurrent.senderIds.length > 0) {
+      store.setExtracted(session.sessionId, "emailAddresses", extractedCurrent.senderIds);
+    }
+    if (merged.emails.length > 0) {
+      store.setExtracted(session.sessionId, "emailAddresses", merged.emails);
+    }
+    if (merged.bankAccounts.length > 0) {
+      store.setExtracted(session.sessionId, "bankAccount", merged.bankAccounts);
+    }
+    if (session.facts.orgNames.size > 0) {
+      store.setExtracted(session.sessionId, "orgName", Array.from(session.facts.orgNames));
+    }
+
     const newIntel =
       session.facts.employeeIds.size > beforeSizes.employeeIds ||
       session.facts.phoneNumbers.size > beforeSizes.phones ||
@@ -397,7 +434,10 @@ const handleHoneypot = async (req: Request, res: Response) => {
       extracted: merged,
       askedQuestions: session.askedSlots,
       lastIntents: session.lastIntents,
-      lastScammerMessage: messageText
+      lastScammerMessage: messageText,
+      askedHistory: session.askedHistory,
+      repeatDemand: engagementSignals.sameDemandRepeat || engagementSignals.urgencyRepeat,
+      refusedCaseId
     });
 
     const summary =
@@ -458,8 +498,15 @@ const handleHoneypot = async (req: Request, res: Response) => {
         maxTurns
       })
     ) {
-      reply = writeReply(writerInput);
-      councilNotes = councilNotes ? `${councilNotes}, fallback=writer` : "fallback=writer";
+      reply = safeFallbackReply({
+        lastReplies: session.lastReplyTexts,
+        engagementStage: session.engagementStage || "CONFUSED",
+        facts: session.facts,
+        lastScammerMessage: messageText,
+        turnIndex: session.engagement.totalMessagesExchanged + 1,
+        maxTurns
+      });
+      councilNotes = councilNotes ? `${councilNotes}, fallback=style` : "fallback=style";
       chosenIntent = chosenIntent || planner.nextSlot;
     }
     const throwOffCandidate = maybeAddThrowOff(reply, session, chosenIntent || planner.nextSlot);
@@ -496,6 +543,26 @@ const handleHoneypot = async (req: Request, res: Response) => {
     }
     if (chosenIntent && chosenIntent !== "none") {
       session.askedSlots.add(chosenIntent);
+      const slotMap: Record<string, string[]> = {
+        ask_ticket_or_case_id: ["caseId", "referenceId", "complaintId"],
+        ask_branch_city: ["branchCity", "branchName"],
+        ask_department_name: ["department"],
+        ask_employee_id: ["employeeId"],
+        ask_designation: ["designation"],
+        ask_callback_number: ["callbackNumber", "phoneNumbers"],
+        ask_escalation_authority: ["supervisorName"],
+        ask_transaction_amount_time: ["transactionId", "amount", "timeWindow"],
+        ask_transaction_mode: ["transactionId"],
+        ask_merchant_receiver: ["merchantName"],
+        ask_device_type: ["appName"],
+        ask_login_location: ["branchCity"],
+        ask_ip_or_reason: ["transactionId"],
+        ask_sender_id_or_email: ["emailAddresses"],
+        ask_links: ["phishingLinks"],
+        ask_upi_or_beneficiary: ["upiId"],
+        ask_names_used: ["orgName"]
+      };
+      store.markAsked(session.sessionId, chosenIntent as Intent, slotMap[chosenIntent] || []);
     }
     session.conversationPhase = computePhase(session.askedSlots);
     void logMessage({
