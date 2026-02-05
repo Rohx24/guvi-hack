@@ -7,6 +7,7 @@ export type ExtractedIntel = {
   upi_ids: string[];
   bank_accounts: string[];
   links: string[];
+  emails: string[];
 };
 
 export type AnalystResult = {
@@ -23,7 +24,8 @@ const EMPTY_INTEL: ExtractedIntel = {
   phone_numbers: [],
   upi_ids: [],
   bank_accounts: [],
-  links: []
+  links: [],
+  emails: []
 };
 
 function extractJson(text: string): any | null {
@@ -58,7 +60,7 @@ export async function analyzeMessage(
       const model = client.getGenerativeModel({ model: modelName });
       const prompt = [
         "Extract the following entities to JSON:",
-        "employee_codes, case_ids, phone_numbers, upi_ids, bank_accounts, links.",
+        "employee_codes, case_ids, phone_numbers, upi_ids, bank_accounts, links, emails.",
         "If a number is explicitly labeled 'Employee Code', extract it even if it's just '4567'.",
         "Return JSON only.",
         `message: ${message}`
@@ -75,7 +77,8 @@ export async function analyzeMessage(
           phone_numbers: normalizeArray(parsed.phone_numbers),
           upi_ids: normalizeArray(parsed.upi_ids),
           bank_accounts: normalizeArray(parsed.bank_accounts),
-          links: normalizeArray(parsed.links)
+          links: normalizeArray(parsed.links),
+          emails: normalizeArray(parsed.emails)
         };
       }
     } catch {
@@ -92,22 +95,23 @@ export async function analyzeMessage(
     phone_numbers: merge(prior.phone_numbers, extracted.phone_numbers),
     upi_ids: merge(prior.upi_ids, extracted.upi_ids),
     bank_accounts: merge(prior.bank_accounts, extracted.bank_accounts),
-    links: merge(prior.links, extracted.links)
+    links: merge(prior.links, extracted.links),
+    emails: merge(prior.emails, extracted.emails)
   };
 
   const t = message.toLowerCase();
   const triggers: string[] = [];
   let scamScore = 0.4;
 
-  if (/(otp)/.test(t) && /(urgent|immediately|asap)/.test(t)) {
-    scamScore = 1.0;
-    triggers.push("otp_urgent");
-  } else if (/(pay|payment|transfer|send money)/.test(t) && /(link|http|https|bit\.ly)/.test(t)) {
+  if (/(otp|upi pin|pin|password)/.test(t)) {
+    scamScore = 0.98;
+    triggers.push("otp_or_pin");
+  } else if (/(link|http|https|bit\.ly)/.test(t) && /(blocked|urgent|immediately|asap)/.test(t)) {
+    scamScore = 0.95;
+    triggers.push("link_urgency");
+  } else if (/(account number|bank account|ifsc|card number)/.test(t) && /(urgent|blocked|immediately|asap)/.test(t)) {
     scamScore = 0.9;
-    triggers.push("pay_link");
-  } else if (/(blocked|suspended)/.test(t) && /(verify|verification|kyc)/.test(t)) {
-    scamScore = 0.8;
-    triggers.push("blocked_verify");
+    triggers.push("account_urgency");
   }
 
   return { extracted: merged, scamScore, triggers };

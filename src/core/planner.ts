@@ -63,6 +63,8 @@ export type PlannerInput = {
   askedQuestions: Set<string>;
   lastIntents: Intent[];
   lastScammerMessage: string;
+  repeatDemand?: boolean;
+  refusedCaseId?: boolean;
 };
 
 export type PlannerOutput = {
@@ -148,7 +150,7 @@ function pickNextIntent(input: PlannerInput): Intent {
   const extracted = input.extracted;
   const normalized = normalizeText(input.lastScammerMessage);
 
-  const burned = new Set<Intent>();
+  const burned = new Set<Intent>(asked as unknown as Set<Intent>);
   const allIntents: Intent[] = [
     "ask_ticket_or_case_id",
     "ask_branch_city",
@@ -179,6 +181,7 @@ function pickNextIntent(input: PlannerInput): Intent {
   }
 
   if (extracted.caseIds.length > 0) burned.add("ask_ticket_or_case_id");
+  if (input.refusedCaseId) burned.add("ask_ticket_or_case_id");
   if (extracted.employeeIds.length > 0) burned.add("ask_employee_id");
   if (extracted.upiIds.length > 0) burned.add("ask_upi_or_beneficiary");
 
@@ -187,6 +190,27 @@ function pickNextIntent(input: PlannerInput): Intent {
 
   if (forceUpi && !burned.has("ask_upi_or_beneficiary")) return "ask_upi_or_beneficiary";
   if (forceEmployee && !burned.has("ask_employee_id")) return "ask_employee_id";
+
+  if (input.repeatDemand) {
+    const priority: Intent[] = [
+      "ask_links",
+      "ask_callback_number",
+      "ask_sender_id_or_email",
+      "ask_upi_or_beneficiary",
+      "ask_merchant_receiver",
+      "ask_employee_id",
+      "ask_department_name",
+      "ask_branch_city",
+      "ask_ticket_or_case_id"
+    ];
+    for (const intent of priority) {
+      if (burned.has(intent)) continue;
+      if (intent === "ask_links" && extracted.phishingLinks.length > 0) continue;
+      if (intent === "ask_upi_or_beneficiary" && extracted.upiIds.length > 0) continue;
+      if (intent === "ask_callback_number" && extracted.phoneNumbers.length > 0) continue;
+      return intent;
+    }
+  }
 
   const ladder: Intent[] = [
     "ask_ticket_or_case_id",

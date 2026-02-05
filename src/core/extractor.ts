@@ -57,9 +57,11 @@ const urlRegex = /https?:\/\/[^\s/$.?#].[^\s]*/gi;
 const paymentLinkRegex = /(?:upi:\/\/pay|payto:)[^\s]+/gi;
 const upiRegex = /[a-zA-Z0-9._-]{2,}@(upi|ybl|okhdfcbank|oksbi|okicici|okaxis|okpaytm|paytm|ibl|axl|sbi|hdfcbank|icici|kotak|baroda|upiicici)/gi;
 const bankAccountRegex = /\b\d{11,18}\b/g;
-const employeeIdRegex = /\b(?:employee|emp|staff)\s*(?:id|code|no|number)?\s*[:#-]?\s*([a-z0-9-]{3,12})\b/gi;
+const employeeIdRegex = /\b(?:employee|emp|staff|officer)\s*(?:id|code|no|number)?\s*[:#-]?\s*([a-z0-9-]{3,12})\b/gi;
 const employeeIdShortRegex = /\bemp\d{3,}\b/gi;
 const caseIdRegex = /\b(?:case|ticket|ref|reference)[- ]?[a-z0-9]{3,}\b/gi;
+const caseIdDigitsRegex = /\b(?:case id|ticket id|reference id)[:\\s-]*([0-9]{3,})\b/gi;
+const employeeCodeDigitsRegex = /\b(?:employee code|officer code)[:\\s-]*([0-9]{3,})\b/gi;
 const tollFreeRegex = /\b(1800|1860|1861|1850)[- ]?\d{3,8}\b/g;
 const senderIdRegex = /\b(?:sender id|sms id|from)[:\\s]*([A-Z0-9-]{4,10})\b/g;
 const senderIdBareRegex = /\b[A-Z]{2}[A-Z0-9]{4,6}\b/g;
@@ -107,6 +109,8 @@ export function extractIntelligence(texts: string[]): ExtractedIntelligence {
   const employeeIds = Array.from(normalized.matchAll(employeeIdRegex)).map((m) => m[1]);
   const employeeIdsShort = normalized.match(employeeIdShortRegex) || [];
   const caseIds = normalized.match(caseIdRegex) || [];
+  const caseIdsDigits = Array.from(normalized.matchAll(caseIdDigitsRegex)).map((m) => m[1]);
+  const employeeCodesDigits = Array.from(normalized.matchAll(employeeCodeDigitsRegex)).map((m) => m[1]);
   const tollFreeNumbers = (combined.match(tollFreeRegex) || []).map((v) =>
     v.replace(/\s|-/g, "")
   );
@@ -122,8 +126,8 @@ export function extractIntelligence(texts: string[]): ExtractedIntelligence {
     phoneNumbers: uniqueMerge([], phones),
     emails: uniqueMerge([], emails),
     suspiciousKeywords: uniqueMerge([], suspicious),
-    employeeIds: uniqueMerge([], [...employeeIds, ...employeeIdsShort]),
-    caseIds: uniqueMerge([], caseIds),
+    employeeIds: uniqueMerge([], [...employeeIds, ...employeeIdsShort, ...employeeCodesDigits]),
+    caseIds: uniqueMerge([], [...caseIds, ...caseIdsDigits]),
     tollFreeNumbers: uniqueMerge([], tollFreeNumbers),
     senderIds: uniqueMerge([], [...senderIds, ...senderIdsBare])
   };

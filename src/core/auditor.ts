@@ -24,9 +24,13 @@ export async function auditReply(
   const client = new OpenAI({ apiKey, timeout: timeoutMs });
 
   const prompt = [
-    "You are the Auditor. Reject if reply says 'I'm driving', 'meeting', 'busy', or mentions AI.",
-    "Reject if no question or no new info asked.",
-    "Rewrite to be skeptical professional, Indian English, concise.",
+    "You are the Auditor. Enforce reluctant compliance and one-question rule.",
+    "Reject if contains banned words: request denied, investigation, verifiable, legitimate channels, suspicious, authenticity, validation, furnish, kindly provide for verification.",
+    "Reject if accuses scam or fraud, or if 2+ questions appear.",
+    "Reject if dead-end stall (driving/meeting/network/busy/later).",
+    "Rewrite to: polite, worried, slightly annoyed. Yes-but compliance.",
+    "Keep SAME extraction goal as reply implies.",
+    "Exactly ONE question mark. <=170 chars.",
     "Return JSON only: {\"approved\":true/false,\"reply\":\"...\"}",
     `Scammer: ${scammerText}`,
     `Reply: ${reply}`

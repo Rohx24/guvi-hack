@@ -51,7 +51,8 @@ const emptyIntel: ExtractedIntel = {
   phone_numbers: [],
   upi_ids: [],
   bank_accounts: [],
-  links: []
+  links: [],
+  emails: []
 };
 
 app.post("/api/honeypot", async (req: Request, res: Response) => {
@@ -78,7 +79,8 @@ app.post("/api/honeypot", async (req: Request, res: Response) => {
   const move: NextMove = chooseNextMove({
     scammerText: text,
     extracted: analyst.extracted,
-    burnt_intents: burned
+    burnt_intents: burned,
+    repeatDemand: /(otp|pin|password)/.test(text.toLowerCase())
   });
   burned.add(move.goal);
 
@@ -98,7 +100,16 @@ app.post("/api/honeypot", async (req: Request, res: Response) => {
     scam_score: analyst.scamScore
   });
 
-  if (nextTurn >= 10) {
+  const intelCount = [
+    analyst.extracted.phone_numbers.length > 0,
+    analyst.extracted.links.length > 0,
+    analyst.extracted.emails.length > 0,
+    analyst.extracted.upi_ids.length > 0,
+    analyst.extracted.case_ids.length > 0,
+    analyst.extracted.employee_codes.length > 0
+  ].filter(Boolean).length;
+
+  if (nextTurn >= 10 || (analyst.scamScore >= 0.95 && intelCount >= 2)) {
     void sendFinalCallback({
       sessionId,
       totalMessagesExchanged: nextTurn,
