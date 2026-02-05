@@ -46,3 +46,8 @@ export function safeLog(message: string): void {
     // swallow logging errors
   }
 }
+
+export function truncateForLog(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  return `${text.slice(0, maxLen)}...(truncated)`;
+}

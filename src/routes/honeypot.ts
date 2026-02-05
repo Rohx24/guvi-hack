@@ -8,7 +8,14 @@ import { sendFinalCallback } from "../core/callback";
 import { summarize } from "../core/summarizer";
 import { generateReplyOpenAI } from "../core/openaiWriter";
 import { makeFullSchema } from "../utils/guviSchema";
-import { maskDigits, safeLog, safeStringify, sanitizeHeaders } from "../utils/logging";
+import { generateReplyCouncil } from "../core/council";
+import {
+  maskDigits,
+  safeLog,
+  safeStringify,
+  sanitizeHeaders,
+  truncateForLog
+} from "../utils/logging";
 
 const router = Router();
 const store = new SessionStore();
@@ -24,11 +31,13 @@ function logIncoming(req: Request, body: unknown) {
 }
 
 function logScammer(text: string) {
-  safeLog(`[SCAMMER] ${maskDigits(text)}`);
+  const maxLen = process.env.DEBUG === "true" ? 2000 : 200;
+  safeLog(`[SCAMMER] ${truncateForLog(maskDigits(text), maxLen)}`);
 }
 
 function logHoneypot(text: string) {
-  safeLog(`[HONEYPOT] ${maskDigits(text)}`);
+  const maxLen = process.env.DEBUG === "true" ? 2000 : 200;
+  safeLog(`[HONEYPOT] ${truncateForLog(maskDigits(text), maxLen)}`);
 }
 
 function logOutgoing(status: number, responseJson: unknown) {
@@ -184,20 +193,44 @@ router.post("/honeypot", async (req: Request, res: Response) => {
     });
 
     const summary = summarize(conversationHistory, merged, session.story, session.persona);
-    const reply = await writeReplySmart(
-      {
-        nextIntent: planner.nextIntent,
-        state: planner.updatedState,
-        stressScore: scores.stressScore,
+    let reply = "";
+    let councilNotes = "";
+    if (process.env.COUNCIL_MODE === "true") {
+      const council = await generateReplyCouncil({
+        sessionId: session.sessionId,
         lastScammerMessage: messageText,
-        story: session.story,
+        conversationHistory,
+        extractedIntel: {
+          bankAccounts: merged.bankAccounts,
+          upiIds: merged.upiIds,
+          phishingLinks: merged.phishingLinks,
+          phoneNumbers: merged.phoneNumbers,
+          suspiciousKeywords: merged.suspiciousKeywords
+        },
         lastReplies: session.lastReplies,
-        turnNumber: session.engagement.totalMessagesExchanged + 1
-      },
-      session.persona,
-      summary,
-      generateReplyOpenAI
-    );
+        turnCount: session.engagement.totalMessagesExchanged + 1,
+        scamScore: scores.scamScore,
+        stressScore: scores.stressScore,
+        storySummary: summary
+      });
+      reply = council.reply;
+      councilNotes = council.agentNotes;
+    } else {
+      reply = await writeReplySmart(
+        {
+          nextIntent: planner.nextIntent,
+          state: planner.updatedState,
+          stressScore: scores.stressScore,
+          lastScammerMessage: messageText,
+          story: session.story,
+          lastReplies: session.lastReplies,
+          turnNumber: session.engagement.totalMessagesExchanged + 1
+        },
+        session.persona,
+        summary,
+        generateReplyOpenAI
+      );
+    }
     logHoneypot(reply);
 
     const now = new Date().toISOString();
@@ -212,9 +245,10 @@ router.post("/honeypot", async (req: Request, res: Response) => {
       session.engagement.totalMessagesExchanged >= maxTurns ? "COMPLETE" : modeBase;
     session.engagement.mode = finalMode;
     session.engagement.lastMessageAt = now;
-    session.agentNotes = `mode=${finalMode}, scamScore=${scores.scamScore.toFixed(
+    const baseNotes = `mode=${finalMode}, scamScore=${scores.scamScore.toFixed(
       2
     )}, stressScore=${scores.stressScore.toFixed(2)}, intent=${planner.nextIntent}`;
+    session.agentNotes = councilNotes ? `${baseNotes}, ${councilNotes}` : baseNotes;
     session.lastIntents = [...session.lastIntents, planner.nextIntent].slice(-6);
     session.lastReplies = [...session.lastReplies, reply].slice(-5);
     safeLog(
