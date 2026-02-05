@@ -3,3 +3,4 @@ dist
 .env
 sessions.json
 *.log
+.DS_Store

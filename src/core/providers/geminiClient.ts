@@ -8,8 +8,8 @@ type GeminiResult = {
   model: string;
 };
 
-const DEFAULT_GEMINI_MODEL = "gemini-3-pro";
-const FALLBACK_GEMINI_MODEL = "gemini-2.5-pro";
+const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
+const FALLBACK_GEMINI_MODEL = "gemini-1.5-flash";
 
 function buildPrompt(input: CouncilInput, candidates: string[]): string {
   const list = candidates.length > 0 ? candidates.map((c, i) => `${i}: ${c}`).join("\n") : "none";

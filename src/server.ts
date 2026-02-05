@@ -7,6 +7,7 @@ import { chooseNextMove, NextMove } from "./core/strategist";
 import { generateReply } from "./core/actor";
 import { auditReply } from "./core/auditor";
 import { sendFinalCallback } from "./utils/guvi";
+import { normalizeReplyStyle } from "./core/style";
 
 dotenv.config();
 
@@ -85,10 +86,21 @@ app.post("/api/honeypot", async (req: Request, res: Response) => {
   burned.add(move.goal);
 
   const draft = await generateReply(move, text, 1200);
-  const reply = await auditReply(draft, text, 1200);
+  const audited = await auditReply(draft, text, 1200);
 
   const nextTurn = (session?.turn_count || 0) + 1;
   const history = Array.isArray(session?.history) ? session.history : [];
+  const lastReplies = history
+    .filter((h: any) => h?.sender === "honeypot" && typeof h?.text === "string")
+    .map((h: any) => h.text)
+    .slice(-5);
+  const reply = normalizeReplyStyle(audited, {
+    lastReplies,
+    engagementStage: "CONFUSED",
+    lastScammerMessage: text,
+    turnIndex: nextTurn,
+    maxTurns: 10
+  });
   history.push({ sender: "scammer", text, ts: new Date().toISOString() });
   history.push({ sender: "honeypot", text: reply, ts: new Date().toISOString() });
 

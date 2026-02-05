@@ -10,6 +10,7 @@ import { generateReplyOpenAI } from "../core/openaiWriter";
 import { generateReplyAuditorGeneral } from "../core/auditorGeneral";
 import { logDecision, logMessage } from "../core/supabase";
 import { computeNextLevel } from "../core/levels";
+import { normalizeReplyStyle } from "../core/style";
 import {
   maskDigits,
   safeLog,
@@ -95,7 +96,7 @@ function maybeAddThrowOff(
     return { reply, used: false };
   }
   const throwOffs = [
-    "I don't recall any transfer above 50k. What amount are you seeing?",
+    "I don't recall any big transfer. What amount are you seeing?",
     "This is a joint account - what's the case or ticket ID?"
   ];
   const prefix = throwOffs[session.usedThrowOffs];
@@ -479,6 +480,14 @@ const handleHoneypot = async (req: Request, res: Response) => {
     if (!reply || reply.trim().length === 0) {
       reply = "OK";
     }
+    reply = normalizeReplyStyle(reply, {
+      lastReplies: session.lastReplyTexts,
+      engagementStage: session.engagementStage || "CONFUSED",
+      facts: session.facts,
+      lastScammerMessage: messageText,
+      turnIndex: session.engagement.totalMessagesExchanged + 1,
+      maxTurns
+    });
     logHoneypot(reply);
 
     session.messages.push({ sender: "honeypot", text: reply, timestamp: nowIso });
@@ -593,10 +602,17 @@ const handleHoneypot = async (req: Request, res: Response) => {
       ? body.conversationHistory.length
       : 0;
     const totalMessagesExchanged = text ? historyLen + 1 : historyLen;
+    const rawReply = fallbackScamDetected
+      ? "Why OTP on chat? What's the ticket number?"
+      : "This is confusing. Do you have a reference number?";
     const responseJson = turnResponse(
-      fallbackScamDetected
-        ? "Why OTP on chat? What's the ticket number?"
-        : "This is confusing. Do you have a reference number?"
+      normalizeReplyStyle(rawReply, {
+        lastReplies: [],
+        engagementStage: "CONFUSED",
+        lastScammerMessage: String(text || ""),
+        turnIndex: totalMessagesExchanged,
+        maxTurns: Number(process.env.MAX_TURNS || 12)
+      })
     );
     logOutgoing(200, responseJson);
     return res.status(200).json(responseJson);

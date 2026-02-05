@@ -10,6 +10,7 @@
     "test:conversation": "ts-node src/tests/testConversation.ts",
     "test:endpoint": "tsx src/tests/testEndpoint.ts",
     "test:two": "tsx src/tests/testTwoTurns.ts",
+    "test:style": "tsx src/tests/testStyleNormalizer.ts",
     "gen:key": "tsx src/scripts/genApiKey.ts"
   },
   "dependencies": {

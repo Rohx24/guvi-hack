@@ -43,33 +43,33 @@ export type WriterInput = {
 };
 
 const CONFUSED_POOL = [
-  "I am trying but the app is confusing me.",
-  "I am trying, but I don't understand this screen.",
-  "I want to do it, but the app is showing a warning."
+  "I'm trying to check, but this screen is confusing me.",
+  "I'm trying, but I'm not sure I'm doing this right.",
+  "I'm worried and checking, the app looks different."
 ];
 
 const SUSPICIOUS_POOL = [
-  "I am trying, but it is asking for something official.",
-  "I am trying, but the website wants a proper verification detail.",
-  "I am trying, but it is not going ahead without your details."
+  "I'm trying, but it asks for your details first.",
+  "I'm trying to follow, but it needs caller info to move.",
+  "I'm trying, but it won't go ahead without basics."
 ];
 
 const ASSERTIVE_POOL = [
-  "I want to cooperate, but it is blocked without your details.",
-  "I am trying, but the app needs your official info to continue.",
-  "I am trying, but it is not accepting without your verification."
+  "I want to sort this, but it needs your details to continue.",
+  "I'm trying, but it's blocked until I add your info.",
+  "I'm trying, but it won't accept without your details."
 ];
 
 const CUNNING_POOL = [
-  "I am trying, but it asks for a verification step you should know.",
-  "I am trying, but it needs a system detail you can confirm.",
-  "I am trying, but it asks for the official process name."
+  "I'm trying, but it asks for a step you should know.",
+  "I'm trying, but it needs a system detail you can confirm.",
+  "I'm trying, but it asks for the process name."
 ];
 
 const HIGH_PRESSURE_POOL = [
-  "I am trying, but it needs exact case details to proceed.",
-  "I am trying, but it requires your official verification code.",
-  "I am trying, but it will not move without your details."
+  "I'm trying, but it needs exact case details to proceed.",
+  "I'm trying, but it needs your ID to continue.",
+  "I'm trying, but it won't move without your details."
 ];
 
 function normalize(text: string): string {
@@ -103,28 +103,28 @@ function pickBase(stage: EngagementStage, level: number, lastReplies: string[]):
 }
 
 const INTENT_QUESTIONS: Record<string, string> = {
-  ask_ticket_or_case_id: "It asks for the Case Reference ID. What should I type there?",
-  ask_branch_city: "It asks for Branch/City. Which one should I select?",
-  ask_department_name: "It asks for Department Name. What should I enter?",
-  ask_employee_id: "It is asking for Employee Code of the caller. Can you give me that?",
-  ask_designation: "It asks for your Designation. What should I put?",
-  ask_callback_number: "It asks for official callback/toll-free. What is it?",
+  ask_ticket_or_case_id: "It asks for the case/reference ID. What should I type there?",
+  ask_branch_city: "It asks for branch or city. Which one is it?",
+  ask_department_name: "It asks for department name. What should I enter?",
+  ask_employee_id: "It is asking for your employee code. What is it?",
+  ask_designation: "It asks for your designation. What should I put?",
+  ask_callback_number: "It asks for a callback or toll-free number. What is it?",
   ask_escalation_authority: "It asks for supervisor/manager name. Who is it?",
-  ask_transaction_amount_time: "It asks for transaction amount and time. What should I fill?",
-  ask_transaction_mode: "It asks for mode (UPI/IMPS/netbanking). Which is it?",
+  ask_transaction_amount_time: "It asks for the amount and time. What should I fill?",
+  ask_transaction_mode: "It asks for the mode (UPI/IMPS/netbanking). Which is it?",
   ask_merchant_receiver: "It asks for beneficiary/receiver name. What is it?",
   ask_device_type: "It asks for device type. Which device is flagged?",
   ask_login_location: "It asks for login city/location. Which one is it?",
   ask_ip_or_reason: "It asks why login was flagged. What reason should I mention?",
   ask_otp_reason: "It asks why OTP is needed. What should I say?",
   ask_no_notification_reason: "It asks why no alert showed. What should I write?",
-  ask_internal_system: "It asks which internal system flagged this. What is the system name?",
+  ask_internal_system: "It asks which internal system flagged this. What is the name?",
   ask_phone_numbers: "It asks for the number you are calling from. What is it?",
-  ask_sender_id_or_email: "It asks for official SMS sender ID or email. What is it?",
-  ask_links: "It asks for the verification link/domain. What is it?",
+  ask_sender_id_or_email: "It asks for SMS sender ID or email. What is it?",
+  ask_links: "It asks for the link or domain. What is it?",
   ask_upi_or_beneficiary: "It asks for UPI handle or beneficiary name. What is it?",
   ask_names_used: "It asks for the name used in your system. What should I enter?",
-  ask_keywords_used: "It asks what keyword/alert triggered this. What should I write?"
+  ask_keywords_used: "It asks what keyword or alert triggered this. What should I write?"
 };
 
 function applyFactContext(slot: string, question: string | undefined, facts?: SessionFacts): string {

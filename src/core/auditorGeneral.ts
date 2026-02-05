@@ -34,7 +34,7 @@ export type AuditorOutput = {
 };
 
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
-const DEFAULT_GEMINI_MODEL = "gemini-2.5-pro";
+const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
 
 const INTENTS = [
   "ask_ticket_or_case_id",
@@ -384,13 +384,13 @@ function auditorPrompt(input: AuditorInput, candidates: { reply: string; intent:
     .join("\n");
   return [
     "You are the GPT Auditor. Strict quality control.",
-    "Reject if reply sounds like a bot or template (\"As an AI...\").",
-    "Reject if detective/legal tone or moderation language appears.",
-    "Reject if it accuses the scammer or mentions scam/fraud/police.",
-    "Reject if dead-end (driving / meeting / busy / call later / network slow / battery / sleeping).",
-    "Reject if no new intel is asked or slot repeats.",
-    "Reject if no question mark or more than one question mark.",
-    "Reject if demanding tone (\"be clear\", \"answer clearly\", \"provide details\").",
+    "If reply sounds like a bot or template (\"As an AI...\"), rewrite it.",
+    "If detective/legal tone or moderation language appears, rewrite it.",
+    "If it accuses the scammer or mentions scam/fraud/police, rewrite it.",
+    "If dead-end (driving / meeting / busy / call later / network slow / battery / sleeping), rewrite it.",
+    "If no new intel is asked or slot repeats, rewrite it.",
+    "If no question mark or more than one question mark, rewrite it.",
+    "If demanding tone (\"be clear\", \"answer clearly\", \"provide details\"), rewrite it.",
     "Rewrite to be human, mildly anxious, cautious, Indian English.",
     "Keep yes-but compliance and a single practical blocker.",
     "Return JSON only:",

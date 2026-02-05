@@ -62,10 +62,6 @@ function linesCount(text: string): number {
   return text.split("\n").filter((line) => line.trim().length > 0).length;
 }
 
-function containsLongDigits(text: string): boolean {
-  return /\d{3,}/.test(text);
-}
-
 function repeatsLast(text: string, lastReplies: string[]): boolean {
   const norm = normalize(text);
   return lastReplies.slice(-3).some((r) => normalize(r) === norm);
@@ -119,7 +115,6 @@ export function validateReply(reply: string, ctx: ValidationContext): Validation
   if (!reply || reply.trim().length === 0) return { ok: false, reason: "empty" };
   if (reply.length > 200) return { ok: false, reason: "too_long" };
   if (linesCount(reply) > 3) return { ok: false, reason: "too_many_lines" };
-  if (containsLongDigits(reply)) return { ok: false, reason: "digits" };
   if (containsForbidden(reply)) return { ok: false, reason: "forbidden" };
   if (asksForSensitive(reply)) return { ok: false, reason: "sensitive" };
   if (!reply.includes("?")) return { ok: false, reason: "no_question" };
