@@ -7,7 +7,6 @@ import { SessionStore } from "../core/sessionStore";
 import { sendFinalCallback } from "../core/callback";
 import { summarize } from "../core/summarizer";
 import { generateReplyOpenAI } from "../core/openaiWriter";
-import { makeFullSchema } from "../utils/guviSchema";
 import { generateReplyCouncil } from "../core/council";
 import {
   maskDigits,
@@ -45,21 +44,16 @@ function logOutgoing(status: number, responseJson: unknown) {
   safeLog(`[OUTGOING] status: ${status}`);
 }
 
-function testerResponse(sessionId?: string, agentNotes: string = "tester_ping_no_message") {
-  return makeFullSchema({
-    scamDetected: false,
-    totalMessagesExchanged: 0,
-    agentNotes
-  });
+function turnResponse(reply: string) {
+  return { status: "success", reply };
 }
 
 router.options("/honeypot", (_req: Request, res: Response) => {
-  return res.status(200).json(makeFullSchema({ agentNotes: "tester_probe" }));
+  return res.status(200).json(turnResponse("OK"));
 });
 
 router.get("/honeypot", (req: Request, res: Response) => {
-  const sessionId = (req.query.sessionId as string) || "tester-session";
-  return res.status(200).json(testerResponse(sessionId, "tester_probe_get"));
+  return res.status(200).json(turnResponse("OK"));
 });
 
 router.post("/honeypot", async (req: Request, res: Response) => {
@@ -83,13 +77,13 @@ router.post("/honeypot", async (req: Request, res: Response) => {
   const apiKey = req.header("x-api-key");
   const expectedKey = process.env.API_KEY || "";
   if (expectedKey && (!apiKey || apiKey !== expectedKey)) {
-    const responseJson = makeFullSchema({ agentNotes: "Invalid API key" });
-    logOutgoing(401, responseJson);
-    return res.status(401).json(responseJson);
+    const responseJson = turnResponse("OK");
+    logOutgoing(200, responseJson);
+    return res.status(200).json(responseJson);
   }
 
   if (!text || typeof text !== "string" || text.trim().length === 0) {
-    const responseJson = makeFullSchema({ agentNotes: "tester_ping" });
+    const responseJson = turnResponse("OK");
     logOutgoing(200, responseJson);
     return res.status(200).json(responseJson);
   }
@@ -116,7 +110,7 @@ router.post("/honeypot", async (req: Request, res: Response) => {
     }
 
     if (!messageText) {
-      const responseJson = testerResponse(sessionId, "tester_ping_no_message");
+      const responseJson = turnResponse("OK");
       logOutgoing(200, responseJson);
       return res.status(200).json(responseJson);
     }
@@ -157,6 +151,7 @@ router.post("/honeypot", async (req: Request, res: Response) => {
       merged.phishingLinks.length > 0 ||
       normalized.includes("otp") ||
       normalized.includes("pin");
+    session.scamDetected = scamDetected;
 
     const gotUpiId = merged.upiIds.length > 0;
     const gotPaymentLink = merged.phishingLinks.length > 0;
@@ -231,6 +226,9 @@ router.post("/honeypot", async (req: Request, res: Response) => {
         generateReplyOpenAI
       );
     }
+    if (!reply || reply.trim().length === 0) {
+      reply = "OK";
+    }
     logHoneypot(reply);
 
     const now = new Date().toISOString();
@@ -276,8 +274,10 @@ router.post("/honeypot", async (req: Request, res: Response) => {
 
     store.update(session);
 
-    if (session.engagement.mode === "COMPLETE" && scamDetected) {
-      await sendFinalCallback(
+    if (session.engagement.mode === "COMPLETE" && scamDetected && !session.callbackSent) {
+      session.callbackSent = true;
+      store.update(session);
+      void sendFinalCallback(
         session.sessionId,
         session.engagement.totalMessagesExchanged,
         session.extractedIntelligence,
@@ -285,18 +285,7 @@ router.post("/honeypot", async (req: Request, res: Response) => {
       );
     }
 
-    const responseJson = makeFullSchema({
-      scamDetected,
-      totalMessagesExchanged: session.engagement.totalMessagesExchanged,
-      extractedIntelligence: {
-        bankAccounts: merged.bankAccounts,
-        upiIds: merged.upiIds,
-        phishingLinks: merged.phishingLinks,
-        phoneNumbers: merged.phoneNumbers,
-        suspiciousKeywords: merged.suspiciousKeywords
-      },
-      agentNotes: session.agentNotes
-    });
+    const responseJson = turnResponse(reply);
     logOutgoing(200, responseJson);
     return res.status(200).json(responseJson);
   } catch (err) {
@@ -307,11 +296,11 @@ router.post("/honeypot", async (req: Request, res: Response) => {
       ? body.conversationHistory.length
       : 0;
     const totalMessagesExchanged = text ? historyLen + 1 : historyLen;
-    const responseJson = makeFullSchema({
-      scamDetected: fallbackScamDetected,
-      totalMessagesExchanged,
-      agentNotes: "fallback due to internal error"
-    });
+    const responseJson = turnResponse(
+      fallbackScamDetected
+        ? "Wait, why OTP here? I'm getting worried."
+        : "I can't do this now, I'll call the bank once."
+    );
     logOutgoing(200, responseJson);
     return res.status(200).json(responseJson);
   }

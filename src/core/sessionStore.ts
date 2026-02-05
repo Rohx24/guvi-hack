@@ -16,6 +16,7 @@ export type EngagementMetrics = {
 export type SessionMemory = {
   sessionId: string;
   state: SessionState;
+  scamDetected: boolean;
   engagement: EngagementMetrics;
   story: StorySummary;
   extractedIntelligence: ExtractedIntelligence;
@@ -24,6 +25,7 @@ export type SessionMemory = {
   lastIntents: Intent[];
   lastReplies: string[];
   agentNotes: string;
+  callbackSent: boolean;
 };
 
 const DEFAULT_STATE: SessionState = {
@@ -94,6 +96,8 @@ export class SessionStore {
       if (!existing.goalFlags) existing.goalFlags = { ...DEFAULT_GOALS };
       if (!existing.lastIntents) existing.lastIntents = [];
       if (!existing.lastReplies) existing.lastReplies = [];
+      if (typeof existing.scamDetected !== "boolean") existing.scamDetected = false;
+      if (typeof existing.callbackSent !== "boolean") existing.callbackSent = false;
       this.update(existing);
       return existing;
     }
@@ -101,6 +105,7 @@ export class SessionStore {
     const fresh: SessionMemory = {
       sessionId,
       state: { ...DEFAULT_STATE },
+      scamDetected: false,
       engagement: {
         mode: "SAFE",
         totalMessagesExchanged: 0,
@@ -115,7 +120,8 @@ export class SessionStore {
       goalFlags: { ...DEFAULT_GOALS },
       lastIntents: [],
       lastReplies: [],
-      agentNotes: ""
+      agentNotes: "",
+      callbackSent: false
     };
 
     this.sessions.set(sessionId, fresh);
@@ -131,6 +137,7 @@ export class SessionStore {
     const reset: SessionMemory = {
       ...session,
       state: { ...DEFAULT_STATE },
+      scamDetected: false,
       engagement: {
         mode: "SAFE",
         totalMessagesExchanged: 0,
@@ -144,7 +151,8 @@ export class SessionStore {
       goalFlags: { ...DEFAULT_GOALS },
       lastIntents: [],
       lastReplies: [],
-      agentNotes: ""
+      agentNotes: "",
+      callbackSent: false
     };
     this.sessions.set(session.sessionId, reset);
     this.saveToFile();
