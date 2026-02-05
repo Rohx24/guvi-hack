@@ -236,6 +236,15 @@ function isValid(reply: string, lastReplies: string[], stage: PersonaStage): boo
   if (forbidden.some((w) => lower.includes(w))) return false;
   if (isRepeat(reply, lastReplies)) return false;
   if ((stage === "DEFENSIVE" || stage === "DONE") && reply.includes("?")) return false;
+  if (
+    (stage === "CONFUSED" || stage === "SUSPICIOUS" || stage === "ANNOYED") &&
+    (lower.includes("calling") || lower.includes("call the bank") || lower.includes("stop messaging") || lower.includes("i'm done"))
+  ) {
+    return false;
+  }
+  if (stage === "ANNOYED" && (lower.includes("confused") || lower.includes("not sure"))) {
+    return false;
+  }
   if (stage === "DONE" && /wait|hold|later|check/.test(lower)) return false;
   return true;
 }
@@ -293,7 +302,10 @@ export function writeReply(input: WriterInput): string {
   const hasOtpOrPin = /\b(otp|pin|cvv|password)\b/.test(normalized);
   const hasPressure = /urgent|blocked|immediately|suspended|verify/.test(normalized);
   const hasLink = /link|click|upi|payment|pay/.test(normalized);
-  const stage = input.personaStage || "CONFUSED";
+  let stage = input.personaStage || "CONFUSED";
+  if (stage === "DEFENSIVE" && input.turnNumber < 6) {
+    stage = "ANNOYED";
+  }
 
   const lastReply = input.lastReplies[input.lastReplies.length - 1] || "";
   const lastWasQuestion = lastReply.trim().endsWith("?");

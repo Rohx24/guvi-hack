@@ -94,6 +94,7 @@ function generatorSystemPrompt(): string {
     "You are a stressed Indian user on WhatsApp replying to a suspicious bank/security message.",
     "You must sound human: anxious, slightly messy, not robotic.",
     "Replies must be 1-2 lines, <= 140 chars, Indian English.",
+    "Do not say you are calling the bank or ask to stop messaging until DEFENSIVE stage (turn >= 6).",
     "Never reveal scam detection or say AI/bot/honeypot.",
     "Never ask for OTP/PIN/account number.",
     "Never request a link unless scammer already mentioned a link or payment.",
@@ -133,6 +134,7 @@ function auditorPrompt(input: AuditorInput, candidates: { reply: string; intent:
     "You are the Auditor General improving realism and safety.",
     "Pick best candidate or rewrite one improved reply.",
     "Hard reject if: asks OTP/PIN/account, repeats last replies, too polite for stage, >2 lines, >140 chars, contains forbidden words (honeypot/ai/bot/scam/fraud).",
+    "Also reject early-stage replies that say 'calling bank' or 'stop messaging' before DEFENSIVE.",
     "Return JSON only: {\"bestIndex\":0|1|2,\"rewrite\":\"...\",\"intent\":\"...\",\"issues\":[...],\"suggestions\":[...]}",
     `personaStage: ${input.personaStage}`,
     `askedQuestions: ${ctx.asked}`,
@@ -281,13 +283,61 @@ function pickBest(
       lastReplies: input.lastReplies,
       personaStage: input.personaStage,
       facts: input.facts,
-      lastScammerMessage: input.lastScammerMessage
+      lastScammerMessage: input.lastScammerMessage,
+      turnIndex: input.turnIndex
     });
     if (validation.ok) {
       return { reply: item.reply, intent, source: item.source };
     }
   }
   return null;
+}
+
+function nextLadderQuestion(input: AuditorInput): { key: string; question: string } | null {
+  if (input.personaStage === "DEFENSIVE" || input.personaStage === "DONE") return null;
+  const asked = input.askedQuestions;
+  const order: Array<{ key: string; question: string; skip?: boolean }> = [
+    { key: "reference", question: "Do you have any reference or ticket number?" },
+    {
+      key: "designation",
+      question: input.extractedIntel.employeeIds.length > 0 ? "What's your designation?" : "What's your employee ID?"
+    },
+    { key: "branch", question: "Which branch or city is this from?" },
+    { key: "callback", question: "Share an official callback or toll-free number." },
+    { key: "transaction", question: "Which transaction or amount is this about?" },
+    { key: "device", question: "Which device or login was flagged?" },
+    {
+      key: "link",
+      question: "Why are you sending a link for this?",
+      skip: !(/link|http|upi|payment|pay/.test(input.lastScammerMessage.toLowerCase()) || input.facts.hasLink)
+    }
+  ];
+  for (const item of order) {
+    if (item.skip) continue;
+    if (asked.has(item.key)) continue;
+    return item;
+  }
+  return null;
+}
+
+function ensureQuestion(
+  input: AuditorInput,
+  reply: string,
+  intent: string
+): { reply: string; intent: string } {
+  if (reply.includes("?")) return { reply, intent };
+  const next = nextLadderQuestion(input);
+  if (!next) return { reply, intent };
+  const candidate = `${reply} ${next.question}`;
+  const validation = validateReply(candidate, {
+    lastReplies: input.lastReplies,
+    personaStage: input.personaStage,
+    facts: input.facts,
+    lastScammerMessage: input.lastScammerMessage,
+    turnIndex: input.turnIndex
+  });
+  if (validation.ok) return { reply: candidate, intent: next.key };
+  return { reply, intent };
 }
 
 export async function generateReplyAuditorGeneral(input: AuditorInput): Promise<AuditorOutput> {
@@ -368,9 +418,17 @@ export async function generateReplyAuditorGeneral(input: AuditorInput): Promise<
     return { reply: fallback, chosenIntent: "none", notes: "fallback" };
   }
 
+  let finalReply = picked.reply;
+  let finalIntent = normalizeIntent(picked.intent);
+  if (input.personaStage !== "DEFENSIVE" && input.personaStage !== "DONE") {
+    const ensured = ensureQuestion(input, finalReply, finalIntent);
+    finalReply = ensured.reply;
+    finalIntent = ensured.intent;
+  }
+
   safeLog(
     `[AUDITOR] ${input.sessionId} ${JSON.stringify({ used: picked.source, turn: input.turnIndex })}`
   );
 
-  return { reply: picked.reply, chosenIntent: normalizeIntent(picked.intent), notes: picked.source };
+  return { reply: finalReply, chosenIntent: finalIntent, notes: picked.source };
 }

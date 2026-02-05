@@ -49,6 +49,19 @@ function turnResponse(reply: string) {
   return { status: "success", reply };
 }
 
+function pickDoneReply(sessionId: string): string {
+  const pool = [
+    "I'm done with this.",
+    "Do not contact me again.",
+    "Ending this here."
+  ];
+  let hash = 0;
+  for (let i = 0; i < sessionId.length; i += 1) {
+    hash = (hash * 31 + sessionId.charCodeAt(i)) % 100000;
+  }
+  return pool[hash % pool.length];
+}
+
 router.options("/honeypot", (_req: Request, res: Response) => {
   return res.status(200).json(turnResponse("OK"));
 });
@@ -127,7 +140,8 @@ router.post("/honeypot", async (req: Request, res: Response) => {
       const emptyHistory =
         (!conversationHistory || conversationHistory.length === 0) &&
         session.engagement.totalMessagesExchanged > 0;
-      if (session.engagement.mode === "COMPLETE" || tooOld || emptyHistory) {
+      const lockedDone = session.personaStage === "DONE";
+      if (!lockedDone && (session.engagement.mode === "COMPLETE" || tooOld || emptyHistory)) {
         session = store.resetSession(session, messageTimestamp);
       }
     }
@@ -170,11 +184,18 @@ router.post("/honeypot", async (req: Request, res: Response) => {
       .map((m) => m.text);
     const personaSignals = detectPersonaSignals(scammerMessages);
     const turnCount = session.engagement.totalMessagesExchanged + 1;
-    session.personaStage = advancePersonaStage(session.personaStage || "CONFUSED", {
-      ...personaSignals,
-      turnCount,
-      maxTurns
-    });
+    if (session.personaStage !== "DONE") {
+      const nextStage = advancePersonaStage(session.personaStage || "CONFUSED", {
+        ...personaSignals,
+        turnCount,
+        maxTurns
+      });
+      session.personaStage = nextStage;
+      if (nextStage === "DONE" && typeof session.doneAtTurn !== "number") {
+        session.doneAtTurn = turnCount;
+        session.doneReply = session.doneReply || pickDoneReply(session.sessionId);
+      }
+    }
     const extracted = extractIntelligence(texts);
     const extractedCurrent = extractIntelligence([messageText]);
     const merged = mergeIntelligence(session.extractedIntelligence, extracted);
@@ -228,6 +249,9 @@ router.post("/honeypot", async (req: Request, res: Response) => {
     session.facts.hasPhone = session.facts.phoneNumbers.size > 0;
     session.facts.hasLink = session.facts.links.size > 0;
     session.facts.hasUpi = session.facts.upiIds.size > 0;
+    if (session.facts.hasEmployeeId) session.askedQuestions.add("designation");
+    if (session.facts.hasPhone) session.askedQuestions.add("callback");
+    if (session.facts.hasLink || session.facts.hasUpi) session.askedQuestions.add("link");
 
     const summaryBits: string[] = [];
     if (scamDetected) summaryBits.push("Scammer likely fraud");
@@ -278,7 +302,10 @@ router.post("/honeypot", async (req: Request, res: Response) => {
     };
     const councilEnabled = process.env.COUNCIL_MODE !== "false";
     if (session.personaStage === "DONE") {
-      reply = writeReply(writerInput);
+      if (!session.doneReply) {
+        session.doneReply = pickDoneReply(session.sessionId);
+      }
+      reply = session.doneReply;
       chosenIntent = "none";
       councilNotes = "stage_done";
     } else if (councilEnabled) {
@@ -383,12 +410,11 @@ router.post("/honeypot", async (req: Request, res: Response) => {
 
     store.update(session);
 
-    if (
+    const callbackDue =
       scamDetected &&
-      session.personaStage === "DONE" &&
-      !session.callbackSent &&
-      !session.callbackInFlight
-    ) {
+      (session.personaStage === "DONE" ||
+        session.engagement.totalMessagesExchanged >= maxTurns * 2);
+    if (callbackDue && !session.callbackSent && !session.callbackInFlight) {
       session.callbackInFlight = true;
       store.update(session);
       void sendFinalCallback(

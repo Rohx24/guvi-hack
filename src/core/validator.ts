@@ -60,6 +60,7 @@ export type ValidationContext = {
   personaStage: PersonaStage;
   facts?: SessionFacts;
   lastScammerMessage?: string;
+  turnIndex?: number;
 };
 
 export type ValidationResult = { ok: boolean; reason?: string };
@@ -77,6 +78,20 @@ export function validateReply(reply: string, ctx: ValidationContext): Validation
   if (repeatsLast(reply, ctx.lastReplies)) return { ok: false, reason: "repeat" };
   if ((ctx.personaStage === "DEFENSIVE" || ctx.personaStage === "DONE") && reply.includes("?")) {
     return { ok: false, reason: "question_in_late_stage" };
+  }
+  const lower = reply.toLowerCase();
+  const turnIndex = ctx.turnIndex ?? 0;
+  if (
+    (ctx.personaStage === "CONFUSED" || ctx.personaStage === "SUSPICIOUS" || ctx.personaStage === "ANNOYED") &&
+    (lower.includes("calling") || lower.includes("call the bank") || lower.includes("stop messaging") || lower.includes("i'm done"))
+  ) {
+    return { ok: false, reason: "too_defensive" };
+  }
+  if ((ctx.personaStage === "DEFENSIVE" || ctx.personaStage === "DONE") && turnIndex < 6) {
+    return { ok: false, reason: "too_early_defensive" };
+  }
+  if (ctx.personaStage === "ANNOYED" && (lower.includes("confused") || lower.includes("not sure"))) {
+    return { ok: false, reason: "too_soft" };
   }
   return { ok: true };
 }

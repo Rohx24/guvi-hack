@@ -43,6 +43,8 @@ export type SessionMemory = {
   state: SessionState;
   scamDetected: boolean;
   personaStage: PersonaStage;
+  doneAtTurn?: number;
+  doneReply?: string;
   engagement: EngagementMetrics;
   story: StorySummary;
   extractedIntelligence: ExtractedIntelligence;
@@ -188,6 +190,14 @@ export class SessionStore {
             : "",
         personaStage:
           (session as unknown as { personaStage?: PersonaStage }).personaStage || "CONFUSED",
+        doneAtTurn:
+          typeof (session as unknown as { doneAtTurn?: number }).doneAtTurn === "number"
+            ? (session as unknown as { doneAtTurn: number }).doneAtTurn
+            : undefined,
+        doneReply:
+          typeof (session as unknown as { doneReply?: string }).doneReply === "string"
+            ? (session as unknown as { doneReply: string }).doneReply
+            : undefined,
         callbackInFlight: Boolean(
           (session as unknown as { callbackInFlight?: boolean }).callbackInFlight
         )
@@ -201,7 +211,9 @@ export class SessionStore {
     const payload = Array.from(this.sessions.values()).map((session) => ({
       ...session,
       facts: serializeFacts(session.facts),
-      askedQuestions: Array.from(session.askedQuestions || [])
+      askedQuestions: Array.from(session.askedQuestions || []),
+      doneAtTurn: session.doneAtTurn,
+      doneReply: session.doneReply
     }));
     fs.writeFileSync(this.persistFile, JSON.stringify(payload, null, 2));
   }
@@ -211,6 +223,8 @@ export class SessionStore {
     if (existing) {
       if (!existing.persona) existing.persona = createPersona();
       if (!existing.personaStage) existing.personaStage = "CONFUSED";
+      if (typeof existing.doneAtTurn !== "number") existing.doneAtTurn = undefined;
+      if (typeof existing.doneReply !== "string") existing.doneReply = undefined;
       if (!existing.goalFlags) existing.goalFlags = { ...DEFAULT_GOALS };
       if (!existing.lastIntents) existing.lastIntents = [];
       if (!existing.lastReplies) existing.lastReplies = [];
@@ -234,6 +248,8 @@ export class SessionStore {
       state: { ...DEFAULT_STATE },
       scamDetected: false,
       personaStage: "CONFUSED",
+      doneAtTurn: undefined,
+      doneReply: undefined,
       engagement: {
         mode: "SAFE",
         totalMessagesExchanged: 0,
@@ -272,6 +288,8 @@ export class SessionStore {
       state: { ...DEFAULT_STATE },
       scamDetected: false,
       personaStage: "CONFUSED",
+      doneAtTurn: undefined,
+      doneReply: undefined,
       engagement: {
         mode: "SAFE",
         totalMessagesExchanged: 0,
