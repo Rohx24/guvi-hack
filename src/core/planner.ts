@@ -1,5 +1,5 @@
 import { clamp01 } from "../utils/mask";
-import { ExtractedIntelligence } from "./extractor";
+import { ExtractedIntelligence, normalizeText } from "./extractor";
 
 export type SessionState = {
   anxiety: number;
@@ -10,6 +10,8 @@ export type SessionState = {
 };
 
 export type SessionMode = "SAFE" | "SUSPECT" | "SCAM_CONFIRMED" | "COMPLETE";
+
+export type PersonaStage = "CONFUSED" | "SUSPICIOUS" | "ANNOYED" | "DEFENSIVE" | "DONE";
 
 export type StorySummary = {
   scamType: string;
@@ -58,6 +60,64 @@ export type PlannerOutput = {
   scamDetected: boolean;
   agentNotes: string;
 };
+
+export type PersonaSignals = {
+  urgencyRepeat: boolean;
+  sameDemandRepeat: boolean;
+  pushyRepeat: boolean;
+};
+
+type DemandBucket = "otp" | "link" | "account";
+
+function classifyDemand(normalized: string): { urgency: boolean; buckets: Set<DemandBucket> } {
+  const urgency = /urgent|immediately|blocked|suspended|verify|now|asap/.test(normalized);
+  const buckets = new Set<DemandBucket>();
+  if (/(otp|pin|password|cvv)/.test(normalized)) buckets.add("otp");
+  if (/(link|click|upi|payment|pay|collect)/.test(normalized)) buckets.add("link");
+  if (/(account|card|bank|ifsc|beneficiary|upi id)/.test(normalized)) buckets.add("account");
+  return { urgency, buckets };
+}
+
+export function detectPersonaSignals(messages: string[]): PersonaSignals {
+  const recent = messages.filter(Boolean).slice(-3).map((m) => normalizeText(m));
+  let urgencyCount = 0;
+  let pushyCount = 0;
+  const counts: Record<DemandBucket, number> = { otp: 0, link: 0, account: 0 };
+
+  for (const msg of recent) {
+    const { urgency, buckets } = classifyDemand(msg);
+    if (urgency) urgencyCount += 1;
+    if (buckets.size > 0) pushyCount += 1;
+    for (const bucket of buckets) {
+      counts[bucket] += 1;
+    }
+  }
+
+  const sameDemandRepeat = Object.values(counts).some((count) => count >= 2);
+  const urgencyRepeat = urgencyCount >= 2;
+  const pushyRepeat = pushyCount >= 2;
+
+  return { urgencyRepeat, sameDemandRepeat, pushyRepeat };
+}
+
+export function advancePersonaStage(
+  current: PersonaStage,
+  input: PersonaSignals & { turnCount: number; maxTurns: number }
+): PersonaStage {
+  if (current === "DONE") return "DONE";
+  if (input.turnCount >= input.maxTurns) return "DONE";
+  if (current === "DEFENSIVE") return "DONE";
+  if (current === "ANNOYED" && input.turnCount >= 6 && input.pushyRepeat) return "DEFENSIVE";
+  if (current === "SUSPICIOUS" && input.turnCount >= 4 && input.sameDemandRepeat) return "ANNOYED";
+  if (
+    current === "CONFUSED" &&
+    input.turnCount >= 2 &&
+    (input.urgencyRepeat || input.sameDemandRepeat)
+  ) {
+    return "SUSPICIOUS";
+  }
+  return current;
+}
 
 function intentRepeated(intent: Intent, lastIntents: Intent[]): boolean {
   const recent = lastIntents.slice(-4);

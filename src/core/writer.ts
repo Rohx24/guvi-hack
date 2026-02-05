@@ -1,4 +1,4 @@
-import { SessionState, StorySummary } from "./planner";
+import { PersonaStage, SessionState, StorySummary } from "./planner";
 import type { Persona } from "./persona";
 import type { ExtractedIntelligence } from "./extractor";
 import type { SessionFacts } from "./sessionStore";
@@ -21,34 +21,65 @@ export type WriterInput = {
   turnNumber: number;
   extracted?: ExtractedIntelligence;
   facts?: SessionFacts;
+  personaStage?: PersonaStage;
+  askedQuestions?: Set<string>;
 };
 
-const humanResistancePool = [
-  "I'm scared to do this. Do you have a ticket number?",
-  "This feels risky. What's your designation?",
-  "I'm not comfortable sharing that. Which branch is this?",
-  "Why do you need this now? Do you have a reference number?",
-  "I'm worried. Can you share an official callback number?"
+const stageRank: Record<PersonaStage, number> = {
+  CONFUSED: 0,
+  SUSPICIOUS: 1,
+  ANNOYED: 2,
+  DEFENSIVE: 3,
+  DONE: 4
+};
+
+const CONFUSED_POOL = [
+  "Why am I getting this suddenly?",
+  "I'm confused. Which account is this?",
+  "This is sudden. What happened?",
+  "I'm not sure what's going on."
 ];
 
-const softCompliancePool = [
-  "OTP not coming, I'm trying again. Do you have a case ID?",
-  "The page is loading only. What's your designation?",
-  "App is stuck here. Which branch is this from?",
-  "It's asking PIN and I forgot. Can you share a reference number?"
+const CONFUSED_PRESSURE_POOL = [
+  "Why OTP here? I'm getting scared.",
+  "This feels risky. What's this about?",
+  "I'm worried. Why are you asking this?",
+  "I'm getting nervous. Can you explain?"
 ];
 
-const frictionPool = [
-  "Network is bad here, I'm trying again.",
-  "The app is slow, give me a minute.",
-  "I'm in a meeting, can you wait a bit?",
-  "I'm outside now, I'll check and reply."
+const SUSPICIOUS_POOL = [
+  "You already said this before, why again?",
+  "This doesn't sound right to me.",
+  "Bank usually doesn't ask like this.",
+  "Something feels off, can you explain?"
 ];
 
-const confusionPool = [
-  "I'm not sure what's happening. Which account is this?",
-  "This is sudden. What exactly happened?",
-  "I don't understand. What is this about?"
+const ANNOYED_POOL = [
+  "This is not making sense now.",
+  "I'm not doing this over chat.",
+  "Stop pushing me for this.",
+  "I'm not comfortable with this."
+];
+
+const DEFENSIVE_POOL = [
+  "I'm calling the bank myself now.",
+  "Please stop messaging me.",
+  "I'm not continuing this.",
+  "I'll verify from the official number."
+];
+
+const DONE_POOL = [
+  "I'm done with this.",
+  "Do not contact me again.",
+  "Ending this here.",
+  "Please don't message me further."
+];
+
+const FRICTION_POOL = [
+  "Network is bad here, give me a minute.",
+  "I'm in a meeting, wait a bit.",
+  "App is stuck, I'll try later.",
+  "I'm outside now, will check later."
 ];
 
 const forbidden = [
@@ -81,28 +112,48 @@ function isRepeat(reply: string, lastReplies: string[]): boolean {
   return false;
 }
 
+function stageAtLeast(stage: PersonaStage, target: PersonaStage): boolean {
+  return stageRank[stage] >= stageRank[target];
+}
+
 function hasLinkOrUpiOrPhone(text: string): boolean {
   if (/https?:\/\/\S+/i.test(text)) return true;
-  if (/[a-z0-9._-]{2,}@(upi|ybl|okhdfcbank|oksbi|okicici|okaxis|okpaytm|paytm|ibl|axl|sbi|hdfcbank|icici|kotak|baroda|upiicici)/i.test(text))
+  if (
+    /[a-z0-9._-]{2,}@(upi|ybl|okhdfcbank|oksbi|okicici|okaxis|okpaytm|paytm|ibl|axl|sbi|hdfcbank|icici|kotak|baroda|upiicici)/i.test(
+      text
+    )
+  )
     return true;
   if (/\b\d{10,}\b/.test(text)) return true;
   return false;
 }
 
-function pickAskQuestion(input: WriterInput): string {
+function askedRecently(lastReplies: string[], keywords: string[]): boolean {
+  const joined = normalize(lastReplies.slice(-4).join(" "));
+  return keywords.some((k) => joined.includes(k));
+}
+
+function pickAskQuestion(input: WriterInput, stage: PersonaStage): string {
   const lastReplies = input.lastReplies || [];
   const extracted = input.extracted;
-  const askedSet = input.facts?.asked;
-  const asked = (key: string, keywords: string[]) => {
-    if (askedSet && askedSet.has(key)) return true;
-    return lastReplies.some((r) => keywords.some((k) => normalize(r).includes(k)));
-  };
+  const askedSet = input.askedQuestions;
 
-  const steps: Array<{ key: string; keywords: string[]; question: string; skip?: boolean }> = [
+  const canAsk = stage !== "DEFENSIVE" && stage !== "DONE";
+  if (!canAsk) return "";
+
+  const steps: Array<{
+    key: string;
+    keywords: string[];
+    question: string;
+    condition?: boolean;
+    minStage?: PersonaStage;
+    maxStage?: PersonaStage;
+  }> = [
     {
-      key: "ticket",
-      keywords: ["ticket", "reference", "case id", "case"],
-      question: "Do you have any ticket or reference number?"
+      key: "reference",
+      keywords: ["reference", "ticket", "case"],
+      question: "Do you have any reference number?",
+      maxStage: "CONFUSED"
     },
     {
       key: "designation",
@@ -110,39 +161,53 @@ function pickAskQuestion(input: WriterInput): string {
       question:
         extracted && extracted.employeeIds && extracted.employeeIds.length > 0
           ? "What's your designation?"
-          : "What's your employee ID?"
+          : "What's your employee ID?",
+      minStage: "SUSPICIOUS"
     },
     {
       key: "branch",
-      keywords: ["branch"],
-      question: "Which branch is this from?"
+      keywords: ["branch", "city"],
+      question: "Which branch or city is this from?",
+      minStage: "SUSPICIOUS"
     },
     {
       key: "callback",
       keywords: ["toll free", "callback", "helpline", "official number"],
-      question: "Share an official callback or toll-free number."
+      question: "Share an official callback or toll-free number.",
+      minStage: "SUSPICIOUS"
     },
     {
       key: "transaction",
       keywords: ["transaction", "charge", "amount"],
-      question: "Which transaction is this about?"
+      question: "Which transaction or amount is this about?",
+      minStage: "ANNOYED"
+    },
+    {
+      key: "device",
+      keywords: ["device", "login", "location"],
+      question: "Which device or login was flagged?",
+      minStage: "ANNOYED"
     },
     {
       key: "link",
       keywords: ["link", "sms", "url"],
-      question: "Why are you sending a link for this?"
+      question: "Why are you sending a link for this?",
+      minStage: "SUSPICIOUS",
+      condition: hasLinkOrUpiOrPhone(input.lastScammerMessage) || Boolean(input.facts?.hasLink)
     }
   ];
 
   for (const step of steps) {
-    if (step.key === "callback" && extracted && extracted.phoneNumbers.length > 0) continue;
-    if (step.key === "link" && !hasLinkOrUpiOrPhone(input.lastScammerMessage)) continue;
-    if (asked(step.key, step.keywords)) continue;
+    if (step.minStage && !stageAtLeast(stage, step.minStage)) continue;
+    if (step.maxStage && stageRank[stage] > stageRank[step.maxStage]) continue;
+    if (step.condition === false) continue;
+    if (askedSet && askedSet.has(step.key)) continue;
+    if (askedRecently(lastReplies, step.keywords)) continue;
     if (askedSet) askedSet.add(step.key);
     return step.question;
   }
 
-  return "Can you share a reference number?";
+  return "";
 }
 
 function buildReply(base: string, question?: string): string {
@@ -160,7 +225,7 @@ function addEmotionIfNeeded(reply: string, lastWasQuestion: boolean): string {
   return candidate.length <= 140 ? candidate : reply;
 }
 
-function isValid(reply: string, lastReplies: string[]): boolean {
+function isValid(reply: string, lastReplies: string[], stage: PersonaStage): boolean {
   if (!reply) return false;
   if (reply.includes("\n")) return false;
   if (reply.length > 140) return false;
@@ -170,64 +235,82 @@ function isValid(reply: string, lastReplies: string[]): boolean {
   const lower = reply.toLowerCase();
   if (forbidden.some((w) => lower.includes(w))) return false;
   if (isRepeat(reply, lastReplies)) return false;
+  if ((stage === "DEFENSIVE" || stage === "DONE") && reply.includes("?")) return false;
+  if (stage === "DONE" && /wait|hold|later|check/.test(lower)) return false;
   return true;
 }
 
-function pickFromPool(pool: string[], lastReplies: string[]): string {
+function pickFromPool(pool: string[], lastReplies: string[], stage: PersonaStage): string {
   const shuffled = [...pool].sort(() => Math.random() - 0.5);
   for (const candidate of shuffled) {
-    if (isValid(candidate, lastReplies)) return candidate;
+    if (isValid(candidate, lastReplies, stage)) return candidate;
   }
-  return pool[0] || "I'm not sure. Can you confirm your designation?";
+  return pool[0] || "I'm not sure. Can you explain?";
+}
+
+function maybeAddMemoryPrefix(
+  reply: string,
+  facts: SessionFacts | undefined,
+  stage: PersonaStage,
+  lastReplies: string[]
+): string {
+  if (!facts) return reply;
+  if (stage === "CONFUSED" || stage === "DEFENSIVE" || stage === "DONE") return reply;
+  const prefixes: string[] = [];
+  if (facts.hasLink && Math.random() < 0.3) prefixes.push("You already sent a link.");
+  if (facts.hasEmployeeId && Math.random() < 0.3)
+    prefixes.push("You already shared employee ID.");
+  if (facts.hasPhone && Math.random() < 0.2) prefixes.push("You already sent a number.");
+  if (prefixes.length === 0) return reply;
+  const candidate = `${prefixes[0]} ${reply}`;
+  if (isValid(candidate, lastReplies, stage)) return candidate;
+  return reply;
+}
+
+function pickBase(stage: PersonaStage, hasPressure: boolean, hasOtpOrPin: boolean, hasLink: boolean, lastReplies: string[]): string {
+  if (stage === "DONE") return pickFromPool(DONE_POOL, lastReplies, stage);
+  if (stage === "DEFENSIVE") return pickFromPool(DEFENSIVE_POOL, lastReplies, stage);
+  if (stage === "ANNOYED") return pickFromPool(ANNOYED_POOL, lastReplies, stage);
+  if (stage === "SUSPICIOUS") {
+    if (hasOtpOrPin || hasLink) return pickFromPool(SUSPICIOUS_POOL, lastReplies, stage);
+    if (Math.random() < 0.25) return pickFromPool(FRICTION_POOL, lastReplies, stage);
+    return pickFromPool(SUSPICIOUS_POOL, lastReplies, stage);
+  }
+  if (hasOtpOrPin || hasLink || hasPressure) {
+    return pickFromPool(CONFUSED_PRESSURE_POOL, lastReplies, stage);
+  }
+  if (Math.random() < 0.35) return pickFromPool(FRICTION_POOL, lastReplies, stage);
+  return pickFromPool(CONFUSED_POOL, lastReplies, stage);
+}
+
+export function isReplySafe(reply: string, lastReplies: string[], stage: PersonaStage): boolean {
+  return isValid(reply, lastReplies, stage);
 }
 
 export function writeReply(input: WriterInput): string {
   const message = input.lastScammerMessage || "";
   const normalized = normalize(message);
-  const hasOtpOrPin = /\b(otp|pin)\b/.test(normalized);
+  const hasOtpOrPin = /\b(otp|pin|cvv|password)\b/.test(normalized);
   const hasPressure = /urgent|blocked|immediately|suspended|verify/.test(normalized);
-  const linkPressure = /link|click|upi|payment/.test(normalized);
-  const facts = input.facts;
+  const hasLink = /link|click|upi|payment|pay/.test(normalized);
+  const stage = input.personaStage || "CONFUSED";
 
-  const askQuestion = pickAskQuestion(input);
   const lastReply = input.lastReplies[input.lastReplies.length - 1] || "";
   const lastWasQuestion = lastReply.trim().endsWith("?");
 
-  let base = "";
-  if (hasOtpOrPin) {
-    base = pickFromPool(humanResistancePool, input.lastReplies);
-    const withAsk = buildReply(base, askQuestion);
-    const candidate = isValid(withAsk, input.lastReplies) ? withAsk : base;
-    return addEmotionIfNeeded(candidate, lastWasQuestion);
+  const question = pickAskQuestion(input, stage);
+  let base = pickBase(stage, hasPressure, hasOtpOrPin, hasLink, input.lastReplies);
+  let candidate = buildReply(base, question);
+  if (!isValid(candidate, input.lastReplies, stage)) {
+    candidate = isValid(base, input.lastReplies, stage) ? base : pickFromPool(CONFUSED_POOL, input.lastReplies, stage);
   }
 
-  if (linkPressure) {
-    base = pickFromPool(humanResistancePool, input.lastReplies);
-    const withAsk = buildReply(base, askQuestion);
-    const candidate = isValid(withAsk, input.lastReplies) ? withAsk : base;
-    return addEmotionIfNeeded(candidate, lastWasQuestion);
+  candidate = maybeAddMemoryPrefix(candidate, input.facts, stage, input.lastReplies);
+  candidate = addEmotionIfNeeded(candidate, lastWasQuestion);
+  if (!isValid(candidate, input.lastReplies, stage)) {
+    candidate = pickFromPool(stage === "DONE" ? DONE_POOL : CONFUSED_POOL, input.lastReplies, stage);
   }
-
-  if (hasPressure || input.stressScore > 0.6) {
-    base = pickFromPool(softCompliancePool, input.lastReplies);
-    const withAsk = buildReply(base, askQuestion);
-    const candidate = isValid(withAsk, input.lastReplies) ? withAsk : base;
-    return addEmotionIfNeeded(candidate, lastWasQuestion);
-  }
-
-  const roll = Math.random();
-  if (roll < 0.4) return pickFromPool(confusionPool, input.lastReplies);
-  if (roll < 0.75) return pickFromPool(frictionPool, input.lastReplies);
-  base = pickFromPool(humanResistancePool, input.lastReplies);
-  const withAsk = buildReply(base, askQuestion);
-  const candidate = isValid(withAsk, input.lastReplies) ? withAsk : base;
-  if (facts?.hasLink && Math.random() < 0.35) {
-    return addEmotionIfNeeded(`You already sent a link. ${candidate}`, lastWasQuestion);
-  }
-  if (facts?.hasEmployeeId && Math.random() < 0.35) {
-    return addEmotionIfNeeded(`You already shared employee ID. ${candidate}`, lastWasQuestion);
-  }
-  return addEmotionIfNeeded(candidate, lastWasQuestion);
+  return candidate;
 }
 
 export type OpenAIWriter = (

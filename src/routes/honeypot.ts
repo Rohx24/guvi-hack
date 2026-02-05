@@ -1,8 +1,8 @@
 import { Router, Request, Response } from "express";
 import { extractIntelligence, mergeIntelligence, normalizeText } from "../core/extractor";
 import { computeScores } from "../core/scoring";
-import { planNext } from "../core/planner";
-import { writeReplySmart } from "../core/writer";
+import { advancePersonaStage, detectPersonaSignals, planNext } from "../core/planner";
+import { isReplySafe, writeReply, writeReplySmart } from "../core/writer";
 import { SessionMessage, SessionStore } from "../core/sessionStore";
 import { sendFinalCallback } from "../core/callback";
 import { summarize } from "../core/summarizer";
@@ -154,6 +154,17 @@ router.post("/honeypot", async (req: Request, res: Response) => {
     }
 
     const normalized = normalizeText(messageText);
+    const maxTurns = Number(process.env.MAX_TURNS || 12);
+    const scammerMessages = session.messages
+      .filter((m) => m.sender === "scammer")
+      .map((m) => m.text);
+    const personaSignals = detectPersonaSignals(scammerMessages);
+    const turnCount = session.engagement.totalMessagesExchanged + 1;
+    session.personaStage = advancePersonaStage(session.personaStage || "CONFUSED", {
+      ...personaSignals,
+      turnCount,
+      maxTurns
+    });
     const extracted = extractIntelligence(texts);
     const extractedCurrent = extractIntelligence([messageText]);
     const merged = mergeIntelligence(session.extractedIntelligence, extracted);
@@ -189,11 +200,24 @@ router.post("/honeypot", async (req: Request, res: Response) => {
     };
 
     for (const id of extractedCurrent.employeeIds) session.facts.employeeIds.add(id);
-    for (const phone of extractedCurrent.phoneNumbers) session.facts.phones.add(phone);
+    for (const phone of extractedCurrent.phoneNumbers) session.facts.phoneNumbers.add(phone);
     for (const link of extractedCurrent.phishingLinks) session.facts.links.add(link);
+    for (const upi of extractedCurrent.upiIds) session.facts.upiIds.add(upi);
+    if (/\bsbi\b/.test(normalized)) session.facts.orgNames.add("sbi");
+    if (/\bhdfc\b/.test(normalized)) session.facts.orgNames.add("hdfc");
+    if (/\bicici\b/.test(normalized)) session.facts.orgNames.add("icici");
+    if (/\baxis\b/.test(normalized)) session.facts.orgNames.add("axis");
+    if (/\bkotak\b/.test(normalized)) session.facts.orgNames.add("kotak");
+    if (/\bpaytm\b/.test(normalized)) session.facts.orgNames.add("paytm");
+    if (/\bphonepe\b/.test(normalized)) session.facts.orgNames.add("phonepe");
+    if (/\bgpay\b/.test(normalized) || /google pay/.test(normalized)) {
+      session.facts.orgNames.add("gpay");
+    }
+    if (/amazon pay/.test(normalized)) session.facts.orgNames.add("amazonpay");
     session.facts.hasEmployeeId = session.facts.employeeIds.size > 0;
-    session.facts.hasPhone = session.facts.phones.size > 0;
+    session.facts.hasPhone = session.facts.phoneNumbers.size > 0;
     session.facts.hasLink = session.facts.links.size > 0;
+    session.facts.hasUpi = session.facts.upiIds.size > 0;
 
     const summaryBits: string[] = [];
     if (scamDetected) summaryBits.push("Scammer likely fraud");
@@ -208,7 +232,6 @@ router.post("/honeypot", async (req: Request, res: Response) => {
       session.runningSummary = newSummary;
     }
 
-    const maxTurns = Number(process.env.MAX_TURNS || 12);
     const linkPressure =
       merged.phishingLinks.length > 0 || /link|click|upi|payment/.test(normalized);
     const planner = planNext({
@@ -225,10 +248,28 @@ router.post("/honeypot", async (req: Request, res: Response) => {
       lastIntents: session.lastIntents
     });
 
-    const summary = session.runningSummary || summarize(conversationHistory, merged, session.story, session.persona);
+    const summary =
+      session.runningSummary || summarize(conversationHistory, merged, session.story, session.persona);
     let reply = "";
     let councilNotes = "";
-    if (process.env.COUNCIL_MODE === "true") {
+    const writerInput = {
+      nextIntent: planner.nextIntent,
+      state: planner.updatedState,
+      stressScore: scores.stressScore,
+      lastScammerMessage: messageText,
+      story: session.story,
+      lastReplies: session.lastReplies,
+      turnNumber: session.engagement.totalMessagesExchanged + 1,
+      extracted: merged,
+      facts: session.facts,
+      personaStage: session.personaStage,
+      askedQuestions: session.askedQuestions
+    };
+    const councilEnabled =
+      process.env.COUNCIL_MODE === "true" &&
+      session.personaStage !== "DEFENSIVE" &&
+      session.personaStage !== "DONE";
+    if (councilEnabled) {
       const council = await generateReplyCouncil({
         sessionId: session.sessionId,
         lastScammerMessage: messageText,
@@ -248,23 +289,12 @@ router.post("/honeypot", async (req: Request, res: Response) => {
       });
       reply = council.reply;
       councilNotes = council.agentNotes;
+      if (!isReplySafe(reply, session.lastReplies, session.personaStage || "CONFUSED")) {
+        reply = writeReply(writerInput);
+        councilNotes = councilNotes ? `${councilNotes}, fallback=writer` : "fallback=writer";
+      }
     } else {
-      reply = await writeReplySmart(
-        {
-          nextIntent: planner.nextIntent,
-          state: planner.updatedState,
-          stressScore: scores.stressScore,
-          lastScammerMessage: messageText,
-          story: session.story,
-          lastReplies: session.lastReplies,
-          turnNumber: session.engagement.totalMessagesExchanged + 1,
-          extracted: merged,
-          facts: session.facts
-        },
-        session.persona,
-        summary,
-        generateReplyOpenAI
-      );
+      reply = await writeReplySmart(writerInput, session.persona, summary, generateReplyOpenAI);
     }
     if (!reply || reply.trim().length === 0) {
       reply = "OK";
@@ -285,7 +315,9 @@ router.post("/honeypot", async (req: Request, res: Response) => {
       session.engagement.scammerMessagesReceived + session.engagement.agentMessagesSent;
     const modeBase = scamDetected ? "SCAM_CONFIRMED" : scores.scamScore >= 0.45 ? "SUSPECT" : "SAFE";
     const finalMode =
-      session.engagement.totalMessagesExchanged >= maxTurns ? "COMPLETE" : modeBase;
+      session.personaStage === "DONE" || session.engagement.totalMessagesExchanged >= maxTurns
+        ? "COMPLETE"
+        : modeBase;
     session.engagement.mode = finalMode;
     session.engagement.lastMessageAt = now;
     const baseNotes = `mode=${finalMode}, scamScore=${scores.scamScore.toFixed(
@@ -321,17 +353,24 @@ router.post("/honeypot", async (req: Request, res: Response) => {
 
     if (
       scamDetected &&
-      session.engagement.totalMessagesExchanged >= maxTurns &&
-      !session.callbackSent
+      session.personaStage === "DONE" &&
+      !session.callbackSent &&
+      !session.callbackInFlight
     ) {
-      session.callbackSent = true;
+      session.callbackInFlight = true;
       store.update(session);
       void sendFinalCallback(
         session.sessionId,
         session.engagement.totalMessagesExchanged,
         session.extractedIntelligence,
         session.agentNotes
-      );
+      ).then((result) => {
+        const latest = store.get(session.sessionId);
+        if (!latest) return;
+        if (result.ok) latest.callbackSent = true;
+        latest.callbackInFlight = false;
+        store.update(latest);
+      });
     }
 
     const responseJson = turnResponse(reply);

@@ -1,7 +1,14 @@
 import fs from "fs";
 import path from "path";
 import { ExtractedIntelligence } from "./extractor";
-import { GoalFlags, Intent, SessionMode, SessionState, StorySummary } from "./planner";
+import {
+  GoalFlags,
+  Intent,
+  PersonaStage,
+  SessionMode,
+  SessionState,
+  StorySummary
+} from "./planner";
 import { Persona, createPersona } from "./persona";
 
 export type EngagementMetrics = {
@@ -21,19 +28,21 @@ export type SessionMessage = {
 
 export type SessionFacts = {
   employeeIds: Set<string>;
-  phones: Set<string>;
+  phoneNumbers: Set<string>;
   links: Set<string>;
-  orgs: Set<string>;
+  upiIds: Set<string>;
+  orgNames: Set<string>;
   hasLink: boolean;
   hasEmployeeId: boolean;
   hasPhone: boolean;
-  asked: Set<string>;
+  hasUpi: boolean;
 };
 
 export type SessionMemory = {
   sessionId: string;
   state: SessionState;
   scamDetected: boolean;
+  personaStage: PersonaStage;
   engagement: EngagementMetrics;
   story: StorySummary;
   extractedIntelligence: ExtractedIntelligence;
@@ -44,8 +53,10 @@ export type SessionMemory = {
   agentNotes: string;
   messages: SessionMessage[];
   facts: SessionFacts;
+  askedQuestions: Set<string>;
   runningSummary: string;
   callbackSent: boolean;
+  callbackInFlight?: boolean;
 };
 
 const DEFAULT_STATE: SessionState = {
@@ -83,46 +94,64 @@ const DEFAULT_GOALS: GoalFlags = {
 
 const DEFAULT_FACTS: SessionFacts = {
   employeeIds: new Set<string>(),
-  phones: new Set<string>(),
+  phoneNumbers: new Set<string>(),
   links: new Set<string>(),
-  orgs: new Set<string>(),
+  upiIds: new Set<string>(),
+  orgNames: new Set<string>(),
   hasLink: false,
   hasEmployeeId: false,
   hasPhone: false,
-  asked: new Set<string>()
+  hasUpi: false
 };
 
 function normalizeFacts(raw: Partial<SessionFacts> | undefined): SessionFacts {
-  const toSet = (value: unknown) =>
-    new Set<string>(Array.isArray(value) ? (value as string[]) : []);
+  const toSet = (value: unknown) => {
+    if (value instanceof Set) return new Set<string>(Array.from(value as Set<string>));
+    if (Array.isArray(value)) return new Set<string>(value as string[]);
+    return new Set<string>();
+  };
   const employeeIds = toSet(raw?.employeeIds);
-  const phones = toSet(raw?.phones);
+  const phoneNumbers = toSet(
+    (raw as { phoneNumbers?: unknown } | undefined)?.phoneNumbers ?? (raw as { phones?: unknown } | undefined)?.phones
+  );
   const links = toSet(raw?.links);
-  const orgs = toSet(raw?.orgs);
-  const asked = toSet(raw?.asked);
+  const upiIds = toSet(raw?.upiIds);
+  const orgNames = toSet(
+    (raw as { orgNames?: unknown } | undefined)?.orgNames ?? (raw as { orgs?: unknown } | undefined)?.orgs
+  );
   return {
     employeeIds,
-    phones,
+    phoneNumbers,
     links,
-    orgs,
-    asked,
+    upiIds,
+    orgNames,
     hasLink: Boolean(raw?.hasLink) || links.size > 0,
     hasEmployeeId: Boolean(raw?.hasEmployeeId) || employeeIds.size > 0,
-    hasPhone: Boolean(raw?.hasPhone) || phones.size > 0
+    hasPhone: Boolean(raw?.hasPhone) || phoneNumbers.size > 0,
+    hasUpi: Boolean((raw as { hasUpi?: boolean } | undefined)?.hasUpi) || upiIds.size > 0
   };
 }
 
 function serializeFacts(facts: SessionFacts): Record<string, unknown> {
   return {
     employeeIds: Array.from(facts.employeeIds),
-    phones: Array.from(facts.phones),
+    phoneNumbers: Array.from(facts.phoneNumbers),
     links: Array.from(facts.links),
-    orgs: Array.from(facts.orgs),
-    asked: Array.from(facts.asked),
+    upiIds: Array.from(facts.upiIds),
+    orgNames: Array.from(facts.orgNames),
     hasLink: facts.hasLink,
     hasEmployeeId: facts.hasEmployeeId,
-    hasPhone: facts.hasPhone
+    hasPhone: facts.hasPhone,
+    hasUpi: facts.hasUpi
   };
+}
+
+function normalizeAskedQuestions(raw: unknown): Set<string> {
+  if (raw instanceof Set) return raw as Set<string>;
+  if (Array.isArray(raw)) {
+    return new Set<string>(raw.filter((item) => typeof item === "string") as string[]);
+  }
+  return new Set<string>();
 }
 
 export class SessionStore {
@@ -150,10 +179,18 @@ export class SessionStore {
         messages: Array.isArray((session as unknown as { messages?: SessionMessage[] }).messages)
           ? (session as unknown as { messages: SessionMessage[] }).messages
           : [],
+        askedQuestions: normalizeAskedQuestions(
+          (session as unknown as { askedQuestions?: unknown }).askedQuestions
+        ),
         runningSummary:
           typeof (session as unknown as { runningSummary?: string }).runningSummary === "string"
             ? (session as unknown as { runningSummary: string }).runningSummary
-            : ""
+            : "",
+        personaStage:
+          (session as unknown as { personaStage?: PersonaStage }).personaStage || "CONFUSED",
+        callbackInFlight: Boolean(
+          (session as unknown as { callbackInFlight?: boolean }).callbackInFlight
+        )
       };
       this.sessions.set(session.sessionId, hydrated);
     }
@@ -163,7 +200,8 @@ export class SessionStore {
     if (!this.persistFile) return;
     const payload = Array.from(this.sessions.values()).map((session) => ({
       ...session,
-      facts: serializeFacts(session.facts)
+      facts: serializeFacts(session.facts),
+      askedQuestions: Array.from(session.askedQuestions || [])
     }));
     fs.writeFileSync(this.persistFile, JSON.stringify(payload, null, 2));
   }
@@ -172,17 +210,20 @@ export class SessionStore {
     const existing = this.sessions.get(sessionId);
     if (existing) {
       if (!existing.persona) existing.persona = createPersona();
+      if (!existing.personaStage) existing.personaStage = "CONFUSED";
       if (!existing.goalFlags) existing.goalFlags = { ...DEFAULT_GOALS };
       if (!existing.lastIntents) existing.lastIntents = [];
       if (!existing.lastReplies) existing.lastReplies = [];
       if (typeof existing.scamDetected !== "boolean") existing.scamDetected = false;
       if (typeof existing.callbackSent !== "boolean") existing.callbackSent = false;
+      if (typeof existing.callbackInFlight !== "boolean") existing.callbackInFlight = false;
       if (!existing.extractedIntelligence) existing.extractedIntelligence = { ...DEFAULT_EXTRACTED };
       if (!existing.extractedIntelligence.employeeIds) {
         existing.extractedIntelligence.employeeIds = [];
       }
       if (!existing.messages) existing.messages = [];
       existing.facts = normalizeFacts(existing.facts);
+      if (!existing.askedQuestions) existing.askedQuestions = new Set<string>();
       if (typeof existing.runningSummary !== "string") existing.runningSummary = "";
       this.update(existing);
       return existing;
@@ -192,6 +233,7 @@ export class SessionStore {
       sessionId,
       state: { ...DEFAULT_STATE },
       scamDetected: false,
+      personaStage: "CONFUSED",
       engagement: {
         mode: "SAFE",
         totalMessagesExchanged: 0,
@@ -209,8 +251,10 @@ export class SessionStore {
       agentNotes: "",
       messages: [],
       facts: normalizeFacts(DEFAULT_FACTS),
+      askedQuestions: new Set<string>(),
       runningSummary: "",
-      callbackSent: false
+      callbackSent: false,
+      callbackInFlight: false
     };
 
     this.sessions.set(sessionId, fresh);
@@ -227,6 +271,7 @@ export class SessionStore {
       ...session,
       state: { ...DEFAULT_STATE },
       scamDetected: false,
+      personaStage: "CONFUSED",
       engagement: {
         mode: "SAFE",
         totalMessagesExchanged: 0,
@@ -243,8 +288,10 @@ export class SessionStore {
       agentNotes: "",
       messages: [],
       facts: normalizeFacts(DEFAULT_FACTS),
+      askedQuestions: new Set<string>(),
       runningSummary: "",
-      callbackSent: false
+      callbackSent: false,
+      callbackInFlight: false
     };
     this.sessions.set(session.sessionId, reset);
     this.saveToFile();
