@@ -1,6 +1,7 @@
 import express, { Request, Response, NextFunction } from "express";
 import dotenv from "dotenv";
 import honeypotRouter from "./routes/honeypot";
+import chatRouter from "./routes/chat";
 import { safeLog, safeStringify, sanitizeHeaders } from "./utils/logging";
 
 dotenv.config();
@@ -49,6 +50,7 @@ app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
 app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", honeypotRouter);
+app.use("/api", chatRouter);
 
 app.get("/health", (req, res) => {
   return res.json({ ok: true });
