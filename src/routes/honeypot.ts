@@ -49,6 +49,40 @@ function turnResponse(reply: string) {
   return { status: "success", reply };
 }
 
+function computePhase(asked: Set<string>): string {
+  const phases: Array<{ label: string; intents: string[] }> = [
+    {
+      label: "Phase 1",
+      intents: ["ask_ticket_or_case_id", "ask_branch_city", "ask_department_name"]
+    },
+    {
+      label: "Phase 2",
+      intents: ["ask_employee_id", "ask_designation", "ask_callback_number", "ask_escalation_authority"]
+    },
+    {
+      label: "Phase 3",
+      intents: ["ask_transaction_amount_time", "ask_transaction_mode", "ask_merchant_receiver"]
+    },
+    {
+      label: "Phase 4",
+      intents: ["ask_device_type", "ask_login_location", "ask_ip_or_reason"]
+    },
+    {
+      label: "Phase 5",
+      intents: ["ask_otp_reason", "ask_no_notification_reason", "ask_internal_system"]
+    },
+    {
+      label: "Phase 6",
+      intents: ["ask_phone_numbers", "ask_sender_id_or_email", "ask_links", "ask_upi_or_beneficiary", "ask_names_used", "ask_keywords_used"]
+    }
+  ];
+  for (const phase of phases) {
+    const pending = phase.intents.some((intent) => !asked.has(intent));
+    if (pending) return phase.label;
+  }
+  return "Phase 6";
+}
+
 
 router.options("/honeypot", (_req: Request, res: Response) => {
   return res.status(200).json(turnResponse("OK"));
@@ -241,10 +275,14 @@ const handleHoneypot = async (req: Request, res: Response) => {
     session.facts.hasLink = session.facts.links.size > 0;
     session.facts.hasUpi = session.facts.upiIds.size > 0;
     if (session.facts.caseIds.size > 0) session.askedQuestions.add("ask_ticket_or_case_id");
-    if (session.facts.tollFreeNumbers.size > 0 || session.facts.hasPhone)
-      session.askedQuestions.add("ask_official_callback_tollfree");
+    if (session.facts.employeeIds.size > 0) session.askedQuestions.add("ask_employee_id");
+    if (session.facts.tollFreeNumbers.size > 0 || session.facts.hasPhone) {
+      session.askedQuestions.add("ask_callback_number");
+      session.askedQuestions.add("ask_phone_numbers");
+    }
     if (session.facts.senderIds.size > 0) session.askedQuestions.add("ask_sender_id_or_email");
-    if (session.facts.hasLink || session.facts.hasUpi) session.askedQuestions.add("ask_link_or_upi");
+    if (session.facts.hasLink) session.askedQuestions.add("ask_links");
+    if (session.facts.hasUpi) session.askedQuestions.add("ask_upi_or_beneficiary");
 
     const summaryBits: string[] = [];
     if (scamDetected) summaryBits.push("Scammer likely fraud");
@@ -340,6 +378,7 @@ const handleHoneypot = async (req: Request, res: Response) => {
     if (chosenIntent && chosenIntent !== "none") {
       session.askedQuestions.add(chosenIntent);
     }
+    session.conversationPhase = computePhase(session.askedQuestions);
     void logMessage({
       sessionId: session.sessionId,
       turnIndex: turnCount,

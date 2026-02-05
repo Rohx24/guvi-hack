@@ -21,7 +21,7 @@ function buildSystemPrompt(): string {
     "Over-polished language is undesirable; emotional drift over turns is expected.",
     "Never mention scam, fraud, honeypot, AI, or detection.",
     "Never ask for OTP/PIN/account number and never request delay excuses (network/app/meeting).",
-    "Avoid exit phrases (I'm done/stop messaging/calling bank) unless final turn.",
+    "Avoid exit phrases (I'm done/stop messaging/calling bank).",
     "If stressScore is high, include one emotional cue like 'I'm worried'.",
     "Make the reply a smart extraction question tied to nextIntent.",
     "Output ONLY the reply text. No quotes, no JSON, no explanations."

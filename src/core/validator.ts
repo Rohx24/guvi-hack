@@ -119,10 +119,7 @@ export function validateReply(reply: string, ctx: ValidationContext): Validation
   if (repeatsLast(reply, ctx.lastReplies)) return { ok: false, reason: "repeat" };
   if (hasDelayExcuse(reply)) return { ok: false, reason: "delay_excuse" };
 
-  const turnIndex = ctx.turnIndex ?? 0;
-  const maxTurns = ctx.maxTurns ?? 12;
-  const allowExit = turnIndex >= Math.max(1, maxTurns - 1);
-  if (!allowExit && hasExitPhrase(reply)) return { ok: false, reason: "exit_phrase" };
+  if (hasExitPhrase(reply)) return { ok: false, reason: "exit_phrase" };
 
   return { ok: true };
 }
@@ -132,7 +129,7 @@ export function fallbackReplyForStage(stage: EngagementStage): string {
     case "SUSPICIOUS":
       return "You already said that. Give ticket number and your designation.";
     case "ASSERTIVE":
-      return "Answer clearly: branch/city and official callback number.";
+      return "Be clear: official callback number and branch/city.";
     case "CONFUSED":
     default:
       return "Why am I getting this suddenly? Do you have a reference number?";

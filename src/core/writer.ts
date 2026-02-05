@@ -7,13 +7,27 @@ import { validateReply } from "./validator";
 export type WriterInput = {
   nextIntent:
     | "ask_ticket_or_case_id"
-    | "ask_designation_and_branch"
-    | "ask_official_callback_tollfree"
-    | "ask_transaction_details"
-    | "ask_device_location_details"
+    | "ask_branch_city"
+    | "ask_department_name"
+    | "ask_employee_id"
+    | "ask_designation"
+    | "ask_callback_number"
+    | "ask_escalation_authority"
+    | "ask_transaction_amount_time"
+    | "ask_transaction_mode"
+    | "ask_merchant_receiver"
+    | "ask_device_type"
+    | "ask_login_location"
+    | "ask_ip_or_reason"
+    | "ask_otp_reason"
+    | "ask_no_notification_reason"
+    | "ask_internal_system"
+    | "ask_phone_numbers"
     | "ask_sender_id_or_email"
-    | "ask_link_or_upi"
-    | "ask_secure_process";
+    | "ask_links"
+    | "ask_upi_or_beneficiary"
+    | "ask_names_used"
+    | "ask_keywords_used";
   state: SessionState;
   stressScore: number;
   lastScammerMessage: string;
@@ -37,17 +51,15 @@ const CONFUSED_POOL = [
 const SUSPICIOUS_POOL = [
   "You already said that. Explain properly.",
   "This doesn't feel right to me.",
-  "Bank usually doesn't ask like this.",
-  "Please be clear, I'm not convinced."
+  "Be clear, I'm not convinced yet.",
+  "Why are you pushing this so much?"
 ];
 
 const ASSERTIVE_POOL = [
   "Answer clearly, I need proper details.",
-  "Don't rush me, give the official details.",
-  "Be specific, I'm checking this myself."
+  "Don't rush me, give official details.",
+  "Be specific, I am verifying this."
 ];
-
-const FORBIDDEN = ["honeypot", "ai", "bot", "scam", "fraud"];
 
 function normalize(text: string): string {
   return text
@@ -63,86 +75,58 @@ function isRepeat(reply: string, lastReplies: string[]): boolean {
   return recent.some((prev) => normalize(prev) === norm);
 }
 
-function hasLinkMention(text: string): boolean {
-  if (/https?:\/\/\S+/i.test(text)) return true;
-  if (/\blink\b|\bupi\b|\bpayment\b|\bpay\b/.test(text.toLowerCase())) return true;
-  return false;
-}
-
 function pickBase(stage: EngagementStage, lastReplies: string[]): string {
   const pool = stage === "ASSERTIVE" ? ASSERTIVE_POOL : stage === "SUSPICIOUS" ? SUSPICIOUS_POOL : CONFUSED_POOL;
   const shuffled = [...pool].sort(() => Math.random() - 0.5);
   for (const candidate of shuffled) {
-    if (!isRepeat(candidate, lastReplies) && !FORBIDDEN.some((w) => candidate.toLowerCase().includes(w))) {
-      return candidate;
-    }
+    if (!isRepeat(candidate, lastReplies)) return candidate;
   }
   return pool[0];
 }
 
-function pickQuestion(input: WriterInput, stage: EngagementStage): { key: string; question: string } | null {
-  const asked = input.askedQuestions || new Set<string>();
-  const extracted = input.extracted;
-  const facts = input.facts;
-  const ladder: Array<{ key: string; question: string; skip?: boolean }> = [
-    { key: "ask_ticket_or_case_id", question: "Do you have a ticket or case ID?" },
-    {
-      key: "ask_designation_and_branch",
-      question: "Give your designation and branch/city."
-    },
-    {
-      key: "ask_official_callback_tollfree",
-      question: "Share the official callback or toll-free number."
-    },
-    {
-      key: "ask_transaction_details",
-      question: "What transaction amount and time is this about?"
-    },
-    {
-      key: "ask_device_location_details",
-      question: "Which device and location was this login from?"
-    },
-    {
-      key: "ask_sender_id_or_email",
-      question: "What is the official SMS sender ID or email domain?"
-    },
-    {
-      key: "ask_link_or_upi",
-      question: "Why are you sending a link or UPI for this?",
-      skip: Boolean(extracted && (extracted.phishingLinks.length > 0 || extracted.upiIds.length > 0))
-    },
-    {
-      key: "ask_secure_process",
-      question: "Explain the official process without OTP." // safe wrap-up question
-    }
-  ];
+const INTENT_QUESTIONS: Record<string, string> = {
+  ask_ticket_or_case_id: "Do you have a ticket or case ID?",
+  ask_branch_city: "Which branch or city is this from?",
+  ask_department_name: "Which department is handling this?",
+  ask_employee_id: "What is your employee ID?",
+  ask_designation: "What is your designation?",
+  ask_callback_number: "Share the official callback or toll-free number.",
+  ask_escalation_authority: "Who is the escalation authority for this?",
+  ask_transaction_amount_time: "What transaction amount and time is this about?",
+  ask_transaction_mode: "Which mode was used — UPI, IMPS, or netbanking?",
+  ask_merchant_receiver: "Who is the merchant or receiver name?",
+  ask_device_type: "Which device type was used?",
+  ask_login_location: "Which city/location was this login from?",
+  ask_ip_or_reason: "Why was this login flagged as unusual?",
+  ask_otp_reason: "Why do you need OTP for this?",
+  ask_no_notification_reason: "Why didn't the app show any alert?",
+  ask_internal_system: "Which internal system flagged this?",
+  ask_phone_numbers: "Which official number are you calling from?",
+  ask_sender_id_or_email: "What is the official SMS sender ID or email domain?",
+  ask_links: "Why are you sending a link for this?",
+  ask_upi_or_beneficiary: "Give the UPI ID or beneficiary name.",
+  ask_names_used: "What name was used in your system?",
+  ask_keywords_used: "Which keywords or alerts were triggered?"
+};
 
-  for (const item of ladder) {
-    if (item.skip) continue;
-    if (item.key === "ask_link_or_upi" && !hasLinkMention(input.lastScammerMessage) && !facts?.hasLink && !facts?.hasUpi) {
-      continue;
-    }
-    if (asked.has(item.key)) continue;
-    asked.add(item.key);
-    return { key: item.key, question: item.question };
-  }
-
-  return stage === "ASSERTIVE"
-    ? { key: "ask_secure_process", question: "Explain the official process without OTP." }
-    : null;
+function pickQuestion(input: WriterInput): { key: string; question: string } {
+  const key = input.nextIntent;
+  const question = INTENT_QUESTIONS[key];
+  if (question) return { key, question };
+  return { key: "ask_keywords_used", question: INTENT_QUESTIONS.ask_keywords_used };
 }
 
-function buildReply(base: string, question?: string): string {
-  if (!question) return base;
-  if (base.trim().endsWith("?")) return base;
-  return `${base} ${question}`;
+function buildReply(base: string, question: string): string {
+  const trimmed = base.trim();
+  if (trimmed.endsWith("?")) return trimmed;
+  return `${trimmed} ${question}`;
 }
 
 export function writeReply(input: WriterInput): string {
   const stage: EngagementStage = input.engagementStage || "CONFUSED";
   const base = pickBase(stage, input.lastReplies);
-  const nextQ = pickQuestion(input, stage);
-  const candidate = buildReply(base, nextQ?.question);
+  const nextQ = pickQuestion(input);
+  const candidate = buildReply(base, nextQ.question);
 
   const validation = validateReply(candidate, {
     lastReplies: input.lastReplies,

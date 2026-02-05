@@ -36,13 +36,27 @@ const DEFAULT_GEMINI_MODEL = "gemini-2.5-pro";
 
 const INTENTS = [
   "ask_ticket_or_case_id",
-  "ask_designation_and_branch",
-  "ask_official_callback_tollfree",
-  "ask_transaction_details",
-  "ask_device_location_details",
+  "ask_branch_city",
+  "ask_department_name",
+  "ask_employee_id",
+  "ask_designation",
+  "ask_callback_number",
+  "ask_escalation_authority",
+  "ask_transaction_amount_time",
+  "ask_transaction_mode",
+  "ask_merchant_receiver",
+  "ask_device_type",
+  "ask_login_location",
+  "ask_ip_or_reason",
+  "ask_otp_reason",
+  "ask_no_notification_reason",
+  "ask_internal_system",
+  "ask_phone_numbers",
   "ask_sender_id_or_email",
-  "ask_link_or_upi",
-  "ask_secure_process",
+  "ask_links",
+  "ask_upi_or_beneficiary",
+  "ask_names_used",
+  "ask_keywords_used",
   "none"
 ];
 
@@ -86,25 +100,61 @@ function buildContext(input: AuditorInput) {
   };
 }
 
+function currentPhaseLabel(asked: Set<string>): string {
+  const phases: Array<{ label: string; intents: string[] }> = [
+    {
+      label: "Phase 1",
+      intents: ["ask_ticket_or_case_id", "ask_branch_city", "ask_department_name"]
+    },
+    {
+      label: "Phase 2",
+      intents: ["ask_employee_id", "ask_designation", "ask_callback_number", "ask_escalation_authority"]
+    },
+    {
+      label: "Phase 3",
+      intents: ["ask_transaction_amount_time", "ask_transaction_mode", "ask_merchant_receiver"]
+    },
+    {
+      label: "Phase 4",
+      intents: ["ask_device_type", "ask_login_location", "ask_ip_or_reason"]
+    },
+    {
+      label: "Phase 5",
+      intents: ["ask_otp_reason", "ask_no_notification_reason", "ask_internal_system"]
+    },
+    {
+      label: "Phase 6",
+      intents: ["ask_phone_numbers", "ask_sender_id_or_email", "ask_links", "ask_upi_or_beneficiary", "ask_names_used", "ask_keywords_used"]
+    }
+  ];
+  for (const phase of phases) {
+    const pending = phase.intents.some((i) => !asked.has(i));
+    if (pending) return phase.label;
+  }
+  return "Phase 6";
+}
+
 function generatorSystemPrompt(): string {
   return [
     "You are a stressed Indian user on WhatsApp replying to a suspicious bank/security message.",
     "Sound human: anxious, skeptical, but not robotic.",
     "Replies must be 1-2 lines, <= 160 chars, Indian English.",
     "Never use delay excuses (network/app/meeting/OTP not received).",
-    "Never exit early (no 'I'm done/stop messaging/calling bank') unless it's the final turn.",
+    "Never disengage or exit the conversation.",
     "Never reveal scam detection or say AI/bot/honeypot.",
     "Never ask for OTP/PIN/account number.",
     "Never request a link unless scammer already mentioned a link or payment.",
     "Return STRICT JSON only with 3 candidates and intent tags.",
-    "Format: {\"candidates\":[{\"reply\":\"...\",\"intent\":\"ask_ticket_or_case_id|ask_designation_and_branch|ask_official_callback_tollfree|ask_transaction_details|ask_device_location_details|ask_sender_id_or_email|ask_link_or_upi|ask_secure_process\"}, ...]}"
+    "Format: {\"candidates\":[{\"reply\":\"...\",\"intent\":\"ask_ticket_or_case_id|ask_branch_city|ask_department_name|ask_employee_id|ask_designation|ask_callback_number|ask_escalation_authority|ask_transaction_amount_time|ask_transaction_mode|ask_merchant_receiver|ask_device_type|ask_login_location|ask_ip_or_reason|ask_otp_reason|ask_no_notification_reason|ask_internal_system|ask_phone_numbers|ask_sender_id_or_email|ask_links|ask_upi_or_beneficiary|ask_names_used|ask_keywords_used\"}, ...]}"
   ].join(" ");
 }
 
 function generatorUserPrompt(input: AuditorInput, examples: { scammer: string; honeypot: string }[]) {
   const ctx = buildContext(input);
+  const phase = currentPhaseLabel(input.askedQuestions);
   const lines: string[] = [
     `engagementStage: ${input.engagementStage}`,
+    `phase: ${phase}`,
     `turnIndex: ${input.turnIndex} / ${input.maxTurns}`,
     `signals: urgencyRepeat=${input.signals.urgencyRepeat}, sameDemand=${input.signals.sameDemandRepeat}, pushy=${input.signals.pushyRepeat}`,
     `askedQuestions: ${ctx.asked}`,
@@ -125,16 +175,18 @@ function generatorUserPrompt(input: AuditorInput, examples: { scammer: string; h
 
 function auditorPrompt(input: AuditorInput, candidates: { reply: string; intent: string }[]): string {
   const ctx = buildContext(input);
+  const phase = currentPhaseLabel(input.askedQuestions);
   const list = candidates
     .map((c, i) => `${i}: (${c.intent}) ${c.reply}`)
     .join("\n");
   return [
     "You are the Auditor General improving realism and extraction.",
     "Pick best candidate or rewrite one improved reply.",
-    "Hard reject if: asks OTP/PIN/account, repeats last replies, uses delay excuses, exit lines before final turn, >2 lines, >160 chars, forbidden words (honeypot/ai/bot/scam/fraud).",
+    "Hard reject if: asks OTP/PIN/account, repeats last replies, uses delay excuses, any exit lines, >2 lines, >160 chars, forbidden words (honeypot/ai/bot/scam/fraud).",
     "Rewrite into an extraction question if needed.",
     "Return JSON only: {\"bestIndex\":0|1|2,\"rewrite\":\"...\",\"intent\":\"...\",\"issues\":[...],\"suggestions\":[...]}",
     `engagementStage: ${input.engagementStage}`,
+    `phase: ${phase}`,
     `turnIndex: ${input.turnIndex} / ${input.maxTurns}`,
     `askedQuestions: ${ctx.asked}`,
     `missingIntel: ${ctx.missing}`,
@@ -259,14 +311,33 @@ function normalizeIntent(intent: string): string {
   const lower = intent.toLowerCase();
   if (INTENTS.includes(lower)) return lower;
   if (lower.includes("ticket") || lower.includes("case") || lower.includes("ref")) return "ask_ticket_or_case_id";
-  if (lower.includes("designation") || lower.includes("employee") || lower.includes("branch") || lower.includes("city"))
-    return "ask_designation_and_branch";
-  if (lower.includes("callback") || lower.includes("toll")) return "ask_official_callback_tollfree";
-  if (lower.includes("transaction") || lower.includes("amount") || lower.includes("time")) return "ask_transaction_details";
-  if (lower.includes("device") || lower.includes("login") || lower.includes("location")) return "ask_device_location_details";
-  if (lower.includes("sender") || lower.includes("email") || lower.includes("domain")) return "ask_sender_id_or_email";
-  if (lower.includes("link") || lower.includes("upi")) return "ask_link_or_upi";
-  if (lower.includes("process")) return "ask_secure_process";
+  if (lower.includes("branch") || lower.includes("city")) return "ask_branch_city";
+  if (lower.includes("department")) return "ask_department_name";
+  if (lower.includes("employee id") || lower.includes("emp id")) return "ask_employee_id";
+  if (lower.includes("designation")) return "ask_designation";
+  if (lower.includes("callback") || lower.includes("toll")) return "ask_callback_number";
+  if (lower.includes("escalation") || lower.includes("manager") || lower.includes("supervisor"))
+    return "ask_escalation_authority";
+  if (lower.includes("transaction") || lower.includes("amount") || lower.includes("time"))
+    return "ask_transaction_amount_time";
+  if (lower.includes("mode") || lower.includes("imps") || lower.includes("netbanking"))
+    return "ask_transaction_mode";
+  if (lower.includes("merchant") || lower.includes("receiver")) return "ask_merchant_receiver";
+  if (lower.includes("device")) return "ask_device_type";
+  if (lower.includes("location") || lower.includes("login") || lower.includes("city"))
+    return "ask_login_location";
+  if (lower.includes("ip") || lower.includes("unusual")) return "ask_ip_or_reason";
+  if (lower.includes("otp reason")) return "ask_otp_reason";
+  if (lower.includes("notification") || lower.includes("alert")) return "ask_no_notification_reason";
+  if (lower.includes("internal") || lower.includes("system") || lower.includes("flag"))
+    return "ask_internal_system";
+  if (lower.includes("phone") || lower.includes("number")) return "ask_phone_numbers";
+  if (lower.includes("sender") || lower.includes("email") || lower.includes("domain"))
+    return "ask_sender_id_or_email";
+  if (lower.includes("link")) return "ask_links";
+  if (lower.includes("upi") || lower.includes("beneficiary")) return "ask_upi_or_beneficiary";
+  if (lower.includes("name")) return "ask_names_used";
+  if (lower.includes("keyword")) return "ask_keywords_used";
   return "none";
 }
 
@@ -295,24 +366,36 @@ function nextLadderQuestion(input: AuditorInput): { key: string; question: strin
   const asked = input.askedQuestions;
   const ladder: Array<{ key: string; question: string; skip?: boolean }> = [
     { key: "ask_ticket_or_case_id", question: "Do you have a ticket or case ID?" },
-    { key: "ask_designation_and_branch", question: "Give your designation and branch/city." },
-    { key: "ask_official_callback_tollfree", question: "Share the official callback or toll-free number." },
-    { key: "ask_transaction_details", question: "What transaction amount and time is this about?" },
-    { key: "ask_device_location_details", question: "Which device and location was this login from?" },
+    { key: "ask_branch_city", question: "Which branch or city is this from?" },
+    { key: "ask_department_name", question: "Which department is handling this?" },
+    { key: "ask_employee_id", question: "What is your employee ID?" },
+    { key: "ask_designation", question: "What is your designation?" },
+    { key: "ask_callback_number", question: "Share the official callback or toll-free number." },
+    { key: "ask_escalation_authority", question: "Who is the escalation authority for this?" },
+    { key: "ask_transaction_amount_time", question: "What transaction amount and time is this about?" },
+    { key: "ask_transaction_mode", question: "Which mode was used — UPI, IMPS, or netbanking?" },
+    { key: "ask_merchant_receiver", question: "Who is the merchant or receiver name?" },
+    { key: "ask_device_type", question: "Which device type was used?" },
+    { key: "ask_login_location", question: "Which city/location was this login from?" },
+    { key: "ask_ip_or_reason", question: "Why was this login flagged as unusual?" },
+    { key: "ask_otp_reason", question: "Why do you need OTP for this?" },
+    { key: "ask_no_notification_reason", question: "Why didn't the app show any alert?" },
+    { key: "ask_internal_system", question: "Which internal system flagged this?" },
+    { key: "ask_phone_numbers", question: "Which official number are you calling from?" },
     { key: "ask_sender_id_or_email", question: "What is the official SMS sender ID or email domain?" },
     {
-      key: "ask_link_or_upi",
-      question: "Why are you sending a link or UPI for this?",
-      skip:
-        input.extractedIntel.phishingLinks.length > 0 ||
-        input.extractedIntel.upiIds.length > 0
+      key: "ask_links",
+      question: "Why are you sending a link for this?",
+      skip: input.extractedIntel.phishingLinks.length > 0
     },
-    { key: "ask_secure_process", question: "Explain the official process without OTP." }
+    { key: "ask_upi_or_beneficiary", question: "Give the UPI ID or beneficiary name." },
+    { key: "ask_names_used", question: "What name was used in your system?" },
+    { key: "ask_keywords_used", question: "Which keywords or alerts were triggered?" }
   ];
 
   for (const item of ladder) {
     if (item.skip) continue;
-    if (item.key === "ask_link_or_upi") {
+    if (item.key === "ask_links") {
       const hasContext = /link|http|upi|payment|pay/.test(input.lastScammerMessage.toLowerCase()) || input.facts.hasLink || input.facts.hasUpi;
       if (!hasContext) continue;
     }
@@ -345,8 +428,8 @@ function ensureQuestion(
 
 export async function generateReplyAuditorGeneral(input: AuditorInput): Promise<AuditorOutput> {
   const start = Date.now();
-  const budgetMs = Math.min(Number(process.env.COUNCIL_BUDGET_MS || 3500), 6000);
-  const llmTimeoutMs = Number(process.env.LLM_TIMEOUT_MS || 2800);
+  const budgetMs = Math.min(Number(process.env.COUNCIL_BUDGET_MS || 2000), 2000);
+  const llmTimeoutMs = Math.min(Number(process.env.LLM_TIMEOUT_MS || 1800), Math.max(600, budgetMs - 100));
   const enableRevision = process.env.ENABLE_GPT_REVISION !== "false";
 
   const timeLeft = () => budgetMs - (Date.now() - start);

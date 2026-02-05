@@ -39,6 +39,7 @@ export type SessionMemory = {
   state: SessionState;
   scamDetected: boolean;
   engagementStage: EngagementStage;
+  conversationPhase: string;
   engagement: EngagementMetrics;
   story: StorySummary;
   extractedIntelligence: ExtractedIntelligence;
@@ -212,10 +213,14 @@ export class SessionStore {
           typeof (session as unknown as { runningSummary?: string }).runningSummary === "string"
             ? (session as unknown as { runningSummary: string }).runningSummary
             : "",
-        engagementStage: mapLegacyStage(stage),
-        callbackInFlight: Boolean(
-          (session as unknown as { callbackInFlight?: boolean }).callbackInFlight
-        )
+      engagementStage: mapLegacyStage(stage),
+      conversationPhase:
+        typeof (session as unknown as { conversationPhase?: string }).conversationPhase === "string"
+          ? (session as unknown as { conversationPhase: string }).conversationPhase
+          : "Phase 1",
+      callbackInFlight: Boolean(
+        (session as unknown as { callbackInFlight?: boolean }).callbackInFlight
+      )
       };
       this.sessions.set(session.sessionId, hydrated);
     }
@@ -236,6 +241,7 @@ export class SessionStore {
     if (existing) {
       if (!existing.persona) existing.persona = createPersona();
       if (!existing.engagementStage) existing.engagementStage = "CONFUSED";
+      if (typeof existing.conversationPhase !== "string") existing.conversationPhase = "Phase 1";
       if (!existing.goalFlags) existing.goalFlags = { ...DEFAULT_GOALS };
       if (!existing.lastIntents) existing.lastIntents = [];
       if (!existing.lastReplies) existing.lastReplies = [];
@@ -259,6 +265,7 @@ export class SessionStore {
       state: { ...DEFAULT_STATE },
       scamDetected: false,
       engagementStage: "CONFUSED",
+      conversationPhase: "Phase 1",
       engagement: {
         mode: "SAFE",
         totalMessagesExchanged: 0,
@@ -297,6 +304,7 @@ export class SessionStore {
       state: { ...DEFAULT_STATE },
       scamDetected: false,
       engagementStage: "CONFUSED",
+      conversationPhase: "Phase 1",
       engagement: {
         mode: "SAFE",
         totalMessagesExchanged: 0,

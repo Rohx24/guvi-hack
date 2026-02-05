@@ -21,13 +21,27 @@ export type StorySummary = {
 
 export type Intent =
   | "ask_ticket_or_case_id"
-  | "ask_designation_and_branch"
-  | "ask_official_callback_tollfree"
-  | "ask_transaction_details"
-  | "ask_device_location_details"
+  | "ask_branch_city"
+  | "ask_department_name"
+  | "ask_employee_id"
+  | "ask_designation"
+  | "ask_callback_number"
+  | "ask_escalation_authority"
+  | "ask_transaction_amount_time"
+  | "ask_transaction_mode"
+  | "ask_merchant_receiver"
+  | "ask_device_type"
+  | "ask_login_location"
+  | "ask_ip_or_reason"
+  | "ask_otp_reason"
+  | "ask_no_notification_reason"
+  | "ask_internal_system"
+  | "ask_phone_numbers"
   | "ask_sender_id_or_email"
-  | "ask_link_or_upi"
-  | "ask_secure_process";
+  | "ask_links"
+  | "ask_upi_or_beneficiary"
+  | "ask_names_used"
+  | "ask_keywords_used";
 
 export type GoalFlags = {
   gotUpiId: boolean;
@@ -120,34 +134,54 @@ export function advanceEngagementStage(
 
 function intentRepeated(intent: Intent, lastIntents: Intent[]): boolean {
   const recent = lastIntents.slice(-3);
-  const count = recent.filter((item) => item === intent).length;
-  return count >= 1;
+  return recent.includes(intent);
 }
 
 function pickNextIntent(input: PlannerInput): Intent {
   const asked = input.askedQuestions;
   const extracted = input.extracted;
+
   const ladder: Intent[] = [
+    // Phase 1 – Legitimacy Probe
     "ask_ticket_or_case_id",
-    "ask_designation_and_branch",
-    "ask_official_callback_tollfree",
-    "ask_transaction_details",
-    "ask_device_location_details",
+    "ask_branch_city",
+    "ask_department_name",
+    // Phase 2 – Authority Validation
+    "ask_employee_id",
+    "ask_designation",
+    "ask_callback_number",
+    "ask_escalation_authority",
+    // Phase 3 – Transaction Anchoring
+    "ask_transaction_amount_time",
+    "ask_transaction_mode",
+    "ask_merchant_receiver",
+    // Phase 4 – Device & Location
+    "ask_device_type",
+    "ask_login_location",
+    "ask_ip_or_reason",
+    // Phase 5 – Process Pressure
+    "ask_otp_reason",
+    "ask_no_notification_reason",
+    "ask_internal_system",
+    // Phase 6 – Final Intelligence Harvest
+    "ask_phone_numbers",
     "ask_sender_id_or_email",
-    "ask_link_or_upi",
-    "ask_secure_process"
+    "ask_links",
+    "ask_upi_or_beneficiary",
+    "ask_names_used",
+    "ask_keywords_used"
   ];
 
-  const alreadyHasLinkOrUpi = extracted.phishingLinks.length > 0 || extracted.upiIds.length > 0;
-
   for (const intent of ladder) {
-    if (intent === "ask_link_or_upi" && alreadyHasLinkOrUpi) continue;
+    if (intent === "ask_links" && extracted.phishingLinks.length > 0) continue;
+    if (intent === "ask_upi_or_beneficiary" && extracted.upiIds.length > 0) continue;
+    if (intent === "ask_phone_numbers" && extracted.phoneNumbers.length > 0) continue;
     if (asked.has(intent)) continue;
     if (intentRepeated(intent, input.lastIntents)) continue;
     return intent;
   }
 
-  return "ask_secure_process";
+  return "ask_keywords_used";
 }
 
 export function planNext(input: PlannerInput): PlannerOutput {
